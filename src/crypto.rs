@@ -47,10 +47,10 @@ pub fn derive_session_keys(
     })
 }
 
-pub fn encrypt_data(sender_key: [u8; 32], data: &Vec<u8>) -> (Vec<u8>, Nonce) {
+pub fn encrypt_data(sender_key: [u8; 32], data: &[u8]) -> (Vec<u8>, Nonce) {
     let cipher = ChaCha20Poly1305::new(Key::from_slice(&sender_key));
     let nonce = ChaCha20Poly1305::generate_nonce(&mut OsRng);
-    let data = Deref::deref(data);
+
     let cipher_text = cipher.encrypt(&nonce, data).unwrap();
 
     (cipher_text, nonce)

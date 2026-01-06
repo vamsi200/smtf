@@ -13,6 +13,7 @@ use std::net::{
     Ipv6Addr, SocketAddr, SocketAddrV6, TcpListener, TcpStream, ToSocketAddrs, UdpSocket,
 };
 use std::os::unix::process;
+use std::path::Path;
 use std::process::exit;
 use std::str::FromStr;
 use std::thread::sleep;
@@ -124,11 +125,15 @@ pub fn decode(encoded_data: &HumanReadableTransferCode) -> Result<TransferCode, 
 type Connection = (TcpStream, SocketAddr);
 
 use crate::transfer::{self, receive_file, send_file};
+use rfd::FileDialog;
 
 // Sender
 pub fn sender(socket_addr: SocketAddr, transfer_code: TransferCode) -> Result<(), Error> {
     let mut buf = [0u8; 17];
-    let mut file = File::open("./test.txt")?;
+    let file_path = FileDialog::new().set_directory(".").pick_file().unwrap();
+
+    let mut file = File::open(file_path.clone())?;
+    println!("File Selected - {file_path:?}");
 
     match TcpListener::bind(socket_addr) {
         Ok(listener) => {
@@ -263,13 +268,14 @@ pub fn receiver(transfer_code: TransferCode) -> Result<(), Error> {
         println!("[INFO] PublicKey received successfully!");
 
         if let Ok(_) = send_public_key(&mut stream, &state.public_key) {
+            let mut file = File::create("./write.txt")?;
             println!("[INFO] PublicKey sent successfully!");
             let shared_secret = derive_shared_secret(state.private_key, peer_public_key);
 
             let transcript = derive_transcript(peer_public_key, state.public_key, &secret);
             let session_keys = derive_session_keys(&shared_secret, &transcript, Mode::Receiver)?;
 
-            receive_file(&mut stream, session_keys.receiver_key);
+            receive_file(&mut stream, session_keys.receiver_key, &mut file);
         }
     } else {
         println!("Couldn't connect bro..");
