@@ -50,14 +50,15 @@ pub fn derive_session_keys(
 pub fn encrypt_data(sender_key: [u8; 32], data: &Vec<u8>) -> (Vec<u8>, Nonce) {
     let cipher = ChaCha20Poly1305::new(Key::from_slice(&sender_key));
     let nonce = ChaCha20Poly1305::generate_nonce(&mut OsRng);
-
-    println!("Before Encryption - {data:?}");
     let data = Deref::deref(data);
     let cipher_text = cipher.encrypt(&nonce, data).unwrap();
+
     (cipher_text, nonce)
 }
 
 pub fn decrypt_data(cipher_text: Vec<u8>, nonce: Nonce, receive_key: [u8; 32]) -> Vec<u8> {
     let cipher = ChaCha20Poly1305::new(Key::from_slice(&receive_key));
-    cipher.decrypt(&nonce, &*cipher_text).unwrap()
+    cipher
+        .decrypt(&nonce, &*cipher_text)
+        .expect("Failed to decrypt data")
 }

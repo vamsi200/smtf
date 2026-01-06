@@ -2,19 +2,25 @@
 #![allow(unused)]
 
 use anyhow::{Error, Result};
+use chacha20poly1305::Nonce;
 use rand::RngCore;
 use rand::{rngs::OsRng, TryRngCore};
 use sha2::{Digest, Sha256};
 use std::env::Args;
+use std::fs::File;
 use std::io::{Read, Write};
 use std::net::{
     Ipv6Addr, SocketAddr, SocketAddrV6, TcpListener, TcpStream, ToSocketAddrs, UdpSocket,
 };
+use std::os::unix::process;
+use std::process::exit;
 use std::str::FromStr;
+use std::thread::sleep;
+use std::time::Duration;
 use x25519_dalek::{EphemeralSecret, PublicKey, SharedSecret};
 use zeroize::Zeroize;
 
-use crate::crypto::{self, derive_session_keys, Mode};
+use crate::crypto::{self, derive_session_keys, encrypt_data, Mode};
 
 pub struct HandshakeState {
     public_key: PublicKey,
@@ -51,7 +57,7 @@ pub fn derive_shared_secret(
 pub fn derive_transcript(
     sender_public_key: PublicKey,
     receiver_public_key: PublicKey,
-    secret: Vec<u8>,
+    secret: &Vec<u8>,
 ) -> Vec<u8> {
     let mut hash = Sha256::new();
     hash.update(b"SMTF/1.0");
@@ -117,21 +123,42 @@ pub fn decode(encoded_data: &HumanReadableTransferCode) -> Result<TransferCode, 
 
 type Connection = (TcpStream, SocketAddr);
 
+use crate::transfer::{self, receive_file, send_file};
+
 // Sender
-pub fn bind_and_listen(socket_addr: SocketAddr, transfer_code: TransferCode) -> Result<(), Error> {
+pub fn sender(socket_addr: SocketAddr, transfer_code: TransferCode) -> Result<(), Error> {
     let mut buf = [0u8; 17];
+    let mut file = File::open("./test.txt")?;
 
     match TcpListener::bind(socket_addr) {
         Ok(listener) => {
             let local_addr = listener.local_addr()?;
             println!("Listener Started - {}", local_addr);
-            if let Ok((mut stream, _)) = listener.accept() {
+            if let Ok((mut stream, s)) = listener.accept() {
+                println!("Someone connected - {s:?}");
                 if verify_secret(&mut stream, &transfer_code)? {
-                    let sender_state = generate_key_state();
-                    let public_key = sender_state.public_key.as_bytes();
-                    stream.write(public_key)?;
-                    // Share Public Keys
-                    todo!()
+                    let state = generate_key_state();
+                    send_public_key(&mut stream, &state.public_key)?;
+                    println!("[INFO] PublicKey sent successfully!");
+
+                    if let Ok(peer_public_key) = receive_public_key(&mut stream) {
+                        println!("[INFO] PublicKey received successfully!");
+                        let shared_secret =
+                            derive_shared_secret(state.private_key, peer_public_key);
+                        let transcript = derive_transcript(
+                            state.public_key,
+                            peer_public_key,
+                            &transfer_code.secret,
+                        );
+
+                        let session_keys =
+                            derive_session_keys(&shared_secret, &transcript, Mode::Sender)?;
+
+                        send_file(&mut file, &mut stream, session_keys.sender_key);
+                    }
+                } else {
+                    stream.shutdown(std::net::Shutdown::Both);
+                    exit(1);
                 }
             }
         }
@@ -144,64 +171,73 @@ pub fn bind_and_listen(socket_addr: SocketAddr, transfer_code: TransferCode) -> 
     Ok(())
 }
 
-pub fn send_and_receive_public_key(
-    stream: &mut TcpStream,
-    role: Mode,
-) -> Result<Option<PublicKey>, Error> {
-    let state = generate_key_state();
-    let public_key = state.public_key.as_bytes();
-    let mut buf = [0u8; 33];
-    let mut data: Option<Vec<u8>> = None;
+pub fn send_nonce(stream: &mut TcpStream, nonce: Nonce) -> Result<(), Error> {
+    let nonce_len = nonce.len() as u16;
+    stream.write_all(&nonce_len.to_be_bytes())?;
+    stream.write_all(&nonce.to_vec())?;
+    stream.flush()?;
 
-    match role {
-        Mode::Sender => {
-            let mut ack = [0u8; 3];
-            stream.read_exact(&mut ack)?;
-            if &ack == b"ACK" {
-                stream.write_all(public_key)?;
-                stream.write_all(b"\n")?;
-            }
-            data = None;
-        }
-        Mode::Receiver => {
-            stream.write_all(b"ACK")?;
-            stream.read_exact(&mut buf)?;
-            let mut public_key_data = buf.to_vec();
-            public_key_data.extend_from_slice(&buf[..public_key_data.len()]);
+    Ok(())
+}
 
-            let pos = public_key_data
-                .iter()
-                .position(|&p| p == b'\n')
-                .expect("No NewLine bro");
+pub fn receive_nonce(stream: &mut TcpStream) -> Result<Nonce, Error> {
+    let mut nonce_buf_len = [0u8; 2];
+    stream.read_exact(&mut nonce_buf_len)?;
 
-            data = Some(public_key_data[..pos].to_vec());
-        }
+    let len = u16::from_be_bytes(nonce_buf_len) as usize;
+
+    let mut buf = vec![0u8; len];
+
+    stream.read_exact(&mut buf)?;
+
+    Ok(Nonce::from_slice(&buf).to_owned())
+}
+
+pub fn send_public_key(stream: &mut TcpStream, public_key: &PublicKey) -> Result<(), Error> {
+    let public_key = public_key.as_bytes();
+
+    let len = public_key.len() as u16;
+    stream.write_all(&len.to_be_bytes())?;
+    stream.write_all(public_key)?;
+    stream.flush()?;
+
+    Ok(())
+}
+
+pub fn receive_public_key(stream: &mut TcpStream) -> Result<PublicKey, Error> {
+    let mut len_buf = [0u8; 2];
+    stream.read_exact(&mut len_buf)?;
+    let len = u16::from_be_bytes(len_buf) as usize;
+
+    if len != 32 {
+        return Err(Error::msg("Invalid public key length!"));
     }
 
-    let public_key = if let Some(data) = data {
-        let key_bytes: [u8; 32] = data.as_slice().try_into().unwrap();
-        Some(PublicKey::from(key_bytes))
-    } else {
-        None
-    };
+    let mut buf = [0u8; 32];
+    stream.read_exact(&mut buf)?;
 
-    Ok(public_key)
+    Ok(PublicKey::from(buf))
+}
+
+pub fn send_secret(stream: &mut TcpStream, secret: Vec<u8>) -> Result<(), Error> {
+    stream.write_all(&[0x01])?;
+    stream.write_all(&(secret.len() as u16).to_be_bytes())?;
+    stream.write_all(&secret)?;
+    Ok(())
 }
 
 pub fn verify_secret(stream: &mut TcpStream, transfer_code: &TransferCode) -> Result<bool, Error> {
-    let mut buf = [0u8; 16];
-    let mut data = Vec::new();
-    let mut verify = false;
-    let n = stream.read(&mut buf)?;
+    let mut t = [0u8; 1];
+    stream.read_exact(&mut t)?;
+    assert_eq!(t[0], 0x01);
 
-    data.extend_from_slice(&buf[..n]);
+    let mut len_buf = [0u8; 2];
+    stream.read_exact(&mut len_buf)?;
+    let len = u16::from_be_bytes(len_buf) as usize;
+    let mut buf = vec![0u8; len];
+    stream.read_exact(&mut buf)?;
 
-    while let Some(pos) = data.iter().position(|&p| p == b'\n') {
-        data = data[..pos].to_vec();
-        break;
-    }
-
-    let verify = if data != transfer_code.secret {
+    let verify = if buf != transfer_code.secret {
         println!("Secret is wrong bro!");
         false
     } else {
@@ -212,17 +248,57 @@ pub fn verify_secret(stream: &mut TcpStream, transfer_code: &TransferCode) -> Re
 }
 
 // Receiver
-pub fn connect_to_sender(transfer_code: TransferCode) -> Result<(), Error> {
+pub fn receiver(transfer_code: TransferCode) -> Result<(), Error> {
     let socket_addr = transfer_code.socket_addr;
     let secret = transfer_code.secret;
 
-    println!("Address - {socket_addr}");
-    if let Ok(mut s) = TcpStream::connect(socket_addr) {
-        println!("Connected!");
-        s.write_all(&secret)?;
-        s.write(&[b'\n'])?;
+    if let Ok(mut stream) = TcpStream::connect(socket_addr) {
+        send_secret(&mut stream, secret.clone())?;
+        println!("[INFO] Trying to get Sender's PublicKey");
+
+        let state = generate_key_state();
+        let peer_public_key = receive_public_key(&mut stream)?;
+        assert_ne!(peer_public_key.as_bytes(), state.public_key.as_bytes());
+
+        println!("[INFO] PublicKey received successfully!");
+
+        if let Ok(_) = send_public_key(&mut stream, &state.public_key) {
+            println!("[INFO] PublicKey sent successfully!");
+            let shared_secret = derive_shared_secret(state.private_key, peer_public_key);
+
+            let transcript = derive_transcript(peer_public_key, state.public_key, &secret);
+            let session_keys = derive_session_keys(&shared_secret, &transcript, Mode::Receiver)?;
+
+            receive_file(&mut stream, session_keys.receiver_key);
+        }
     } else {
-        println!("Bruh..");
+        println!("Couldn't connect bro..");
+    }
+
+    Ok(())
+}
+
+pub fn test(socket: SocketAddr, human_readable_code: String) -> Result<(), Error> {
+    let mut receive = false;
+    let mut arguments = std::env::args().skip(1);
+    let mut code = String::new();
+
+    while let Some(args) = arguments.next() {
+        match args.as_str() {
+            "receive" => receive = true,
+            "-code" => code = arguments.next().and_then(|x| x.parse().ok()).unwrap(),
+            _ => {}
+        }
+    }
+
+    let transfer_code = decode(&human_readable_code)?;
+
+    if receive {
+        let transfer_code = decode(&code)?;
+        receiver(transfer_code)?;
+    } else {
+        println!("Code: {human_readable_code}");
+        sender(socket, transfer_code)?;
     }
 
     Ok(())
@@ -240,27 +316,23 @@ mod tests {
 
     #[test]
     fn test_send_and_receive_public_key() {
-        let addr = SocketAddrV6::new(Ipv6Addr::LOCALHOST, 0, 0, 0);
-        let listener = TcpListener::bind(addr).unwrap();
+        let socket_addr = SocketAddrV6::new(Ipv6Addr::LOCALHOST, 0, 0, 0);
+        let listener = TcpListener::bind(socket_addr).unwrap();
         let addr = listener.local_addr().unwrap();
+        let state = generate_key_state();
+        let public_key = state.public_key;
 
-        let receiver_thread = thread::spawn(move || {
-            let (mut stream, _) = listener.accept().unwrap();
-            let pk =
-                send_and_receive_public_key(&mut stream, Mode::Receiver).expect("receiver failed");
-            pk.expect("receiver should get public key")
-        });
-
-        let sender_thread = thread::spawn(move || {
+        thread::spawn(move || {
             let mut stream = TcpStream::connect(addr).unwrap();
-            let pk = send_and_receive_public_key(&mut stream, Mode::Sender).expect("sender failed");
-            assert!(pk.is_none());
+            send_public_key(&mut stream, &public_key).unwrap();
         });
 
-        sender_thread.join().unwrap();
-        let receiver_pk = receiver_thread.join().unwrap();
-
-        assert_eq!(receiver_pk.as_bytes().len(), 32);
+        thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let pk = receive_public_key(&mut stream).unwrap();
+            assert_eq!(pk.as_bytes(), public_key.as_bytes());
+            assert_eq!(pk.as_bytes().len(), public_key.as_bytes().len());
+        });
     }
 
     #[test]
@@ -288,7 +360,7 @@ mod tests {
         let mut shared_secret =
             derive_shared_secret(sender_state.private_key, receiver_state.public_key);
 
-        let hash = derive_transcript(sender_state.public_key, receiver_state.public_key, secret);
+        let hash = derive_transcript(sender_state.public_key, receiver_state.public_key, &secret);
 
         let sender_keys = derive_session_keys(&shared_secret, &hash, Mode::Sender)
             .expect("Failed to derive keys");
