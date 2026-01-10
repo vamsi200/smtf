@@ -1,14 +1,28 @@
 #![allow(unused)]
 
-use std::net::SocketAddr;
+use std::{
+    net::SocketAddr,
+    path::PathBuf,
+    sync::{atomic::AtomicBool, Arc},
+    thread::JoinHandle,
+};
 
-#[derive(Debug)]
+use blake3::Hash;
+
+use crate::handshake::{Decision, TransferCode};
+
+#[derive(Debug, Clone, PartialEq)]
 pub struct FileMetadata {
     pub name: String,
     pub size: String,
     pub file_type: String,
     pub path: String,
-    pub hash: String,
+    pub modified_date: String,
+}
+
+#[derive(Clone, Debug)]
+pub struct FileHash {
+    pub hash: Option<Hash>,
 }
 
 pub struct Networkdata {
@@ -25,12 +39,6 @@ pub enum ProgressState {
     Error(String),
 }
 
-#[derive(Debug)]
-pub enum FileState {
-    FileSelected(FileMetadata),
-    Error(String),
-}
-
 pub struct DestinationData {
     pub path: String,
     pub free_space: String,
@@ -43,8 +51,54 @@ pub enum DestinationState {
     Error(String),
 }
 
-pub enum SenderState {
+#[derive(Clone, Debug)]
+pub struct HandShakeState {
+    pub initialzed_status: bool,
+    pub secret_status: bool,
+    pub handshake_status: bool,
+    pub sending_status: bool,
+    pub completion_status: bool,
+}
+
+#[derive(Clone, Debug)]
+pub struct HandshakeData {
+    pub cwd: PathBuf,
+    pub socket_addr: SocketAddr,
+    pub secrte_code: String, // sharing code to the reciever
+    pub transfer_code: TransferCode,
+    pub file_path: PathBuf,
+}
+
+pub struct Task {
+    pub cancel: Arc<AtomicBool>,
+    pub handle: JoinHandle<()>,
+}
+
+pub enum BackendState {
+    Idle,
+    Sending(Task),
+    Receving(ReceiverTask),
+}
+
+pub struct ReceiverTask {
+    pub handle: JoinHandle<()>,
+    pub decision_tx: std::sync::mpsc::Sender<Decision>,
+}
+
+pub enum Command {
+    StartSender { file_path: PathBuf },
+    StartReciver { code: String },
+    Cancel,
+    Close,
+    Decision(Decision),
+}
+
+pub enum SenderEvent {
     ListenerStarted(SocketAddr),
+    HandshakeDerived(HandshakeData),
+    HandshakeState(HandShakeState),
+    FileData(FileMetadata),
+    FileHash(FileHash),
     SecretValue(String),
     PeerConnected(SocketAddr),
     VerifyingSecret,
@@ -54,24 +108,31 @@ pub enum SenderState {
     DeriveSharedSecret,
     DeriveTranscript,
     DeriveSessionKeys,
-    FileState(FileState),
     TransferStarted,
     TransferCompleted,
     Error(String),
 }
 
-pub enum RecieverState {
-    PeerConnected(SocketAddr),
+pub enum ReceiverState {
+    SecretValue(String),
     SendSecret,
-    SecretSent,
     SecretVerified,
     PublicKeySent,
     PublicKeyReceived,
     DeriveSharedSecret,
     DeriveTranscript,
     DeriveSessionKeys,
-    FileState(FileState),
+    FilePath(PathBuf),
+    FileState(FileMetadata),
+    FileHash(FileHash),
     RecieveStarted,
     RecieveCompleted,
     Error(String),
+}
+
+pub enum ReceiverUiState {
+    Idle,
+    Confirming,
+    Receiving,
+    Completed,
 }

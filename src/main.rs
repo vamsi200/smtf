@@ -5,12 +5,17 @@
 use anyhow::Error;
 use eframe::{Frame, NativeOptions};
 use egui::{Context, FontData, FontDefinitions, Grid, Stroke};
+use log::info;
 use rfd::FileDialog;
 use smtf::{
     handshake::{self, *},
-    helper,
-    state::{self, FileMetadata},
-    ui,
+    helper::{self, get_socket_addr},
+    state::{
+        self, BackendState, Command, FileHash, FileMetadata, HandshakeData, ReceiverState,
+        ReceiverUiState, SenderEvent,
+    },
+    transfer::send_file,
+    ui::{self, AppState},
 };
 use std::{
     env::{self, Args},
@@ -20,24 +25,85 @@ use std::{
     os::unix::fs::MetadataExt,
     path::PathBuf,
     str::FromStr,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        mpsc::{self, Sender},
+        Arc, Mutex,
+    },
 };
 use x25519_dalek::PublicKey;
+use zeroize::Zeroize;
 
 use std::time::{Duration, Instant};
 
 fn main() -> Result<(), Error> {
     env_logger::init();
-    let cwd = env::current_dir().expect("Failed to get current directory!");
-    let Some(file) = FileDialog::new().set_directory(cwd).pick_file() else {
-        println!("No file selected");
-        return Ok(());
+    let (ev_tx, ev_rx) = mpsc::channel::<SenderEvent>();
+    let (cmd_tx, cmd_rx) = mpsc::channel::<Command>();
+    let (rec_tx, rec_rx) = mpsc::channel::<ReceiverState>();
+    let (ui_tx, ui_rx) = mpsc::channel::<ReceiverUiState>();
+
+    let app_state = AppState {
+        handshake_state: None,
+        file_metadata: None,
+        file_hash: FileHash { hash: None },
+        handshake_data: None,
+        completion_status: false,
+        ui_state: None,
     };
 
-    let s = helper::get_file_state(file)?;
-    println!("State: {s:#?}");
+    std::thread::spawn(move || {
+        entry_point(ev_tx, cmd_rx, rec_tx, ui_tx).unwrap();
+    });
+
+    ui::AppState::app(app_state, ev_rx, cmd_tx, rec_rx, ui_rx).expect("Failed to start gui");
+
+    // transfer_code.secret.zeroize();
     Ok(())
 }
 
-fn entry_point() {
-    todo!()
+pub fn entry_point(
+    ev_tx: mpsc::Sender<SenderEvent>,
+    cmd_rx: mpsc::Receiver<Command>,
+    rec_tx: mpsc::Sender<ReceiverState>,
+    ui_tx: mpsc::Sender<ReceiverUiState>,
+) -> Result<(), Error> {
+    let mut state = BackendState::Idle;
+
+    loop {
+        match cmd_rx.recv()? {
+            Command::StartSender { file_path } => {
+                if let BackendState::Sending(task) = state {
+                    task.cancel.store(true, Ordering::Relaxed);
+                    task.handle.join().unwrap();
+                }
+                let new_task = sender(ev_tx.clone(), file_path).expect("Failed to get sender task");
+                state = BackendState::Sending(new_task);
+            }
+            Command::StartReciver { code } => {
+                if let BackendState::Sending(task) = state {
+                    task.cancel.store(true, Ordering::Relaxed);
+                    task.handle.join().unwrap();
+                }
+                let transfer_code = decode(&code)?;
+                let new_task = receiver(transfer_code, rec_tx.clone(), ui_tx.clone())?;
+                state = BackendState::Receving(new_task);
+            }
+            Command::Decision(decision) => {
+                if let BackendState::Receving(task) = &state {
+                    let _ = task.decision_tx.send(decision);
+                }
+            }
+            Command::Cancel => {
+                if let BackendState::Sending(task) = state {
+                    task.cancel.store(true, Ordering::Relaxed);
+                    let _ = task.handle.join();
+                    state = BackendState::Idle;
+                }
+            }
+            Command::Close => {
+                return Ok(());
+            }
+        }
+    }
 }
