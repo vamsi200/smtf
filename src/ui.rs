@@ -15,8 +15,8 @@ use crate::{
     handshake::{decode, encode, sender, Decision},
     helper::get_socket_addr,
     state::{
-        Command, FileHash, FileMetadata, HandShakeState, HandshakeData, ReceiverUiState,
-        SenderEvent,
+        Command, FileHash, FileMetadata, HandShakeState, HandshakeData, ReceiveHandShakeState,
+        ReceiverUiState, SenderEvent, TransferProgress,
     },
 };
 
@@ -27,6 +27,8 @@ pub struct AppState {
     pub handshake_state: Option<HandShakeState>,
     pub completion_status: bool,
     pub ui_state: Option<ReceiverUiState>,
+    pub transfer_progress: Option<TransferProgress>,
+    pub received_handshake_state: Option<ReceiveHandShakeState>,
 }
 
 impl AppState {
@@ -106,6 +108,7 @@ impl AppState {
                                     SenderEvent::HandshakeState(hs) => {
                                         self.handshake_state = Some(hs)
                                     }
+                                    SenderEvent::Trasnfer(tp) => self.transfer_progress = Some(tp),
                                     _ => {}
                                 }
                             }
@@ -122,6 +125,10 @@ impl AppState {
                                 (&self.file_metadata, &self.file_hash, &self.handshake_state)
                             {
                                 sender_card_single_box(ui, &transfer_start, metadata, hash);
+                            }
+
+                            if let Some(tp) = &self.transfer_progress {
+                                progress_bar(ui, &tp);
                             }
                         });
                     }
@@ -146,12 +153,15 @@ impl AppState {
                                 ReceiverState::FileHash(st) => {
                                     self.file_hash = st;
                                 }
+                                ReceiverState::HandshakeState(hs) => {
+                                    self.received_handshake_state = Some(hs);
+                                }
+
                                 _ => {}
                             }
                         }
                         ui.vertical_centered(|ui| {
                             ui.add_space(30.0);
-                            initial_receive_card(ui, &mut receiver_secret, &cmd_tx);
 
                             while let Ok(ev) = ui_rx.try_recv() {
                                 match ev {
@@ -165,8 +175,15 @@ impl AppState {
                                 }
                             }
 
-                            if let Some(ui_state) = &self.ui_state {
-                                match ui_state {
+                            initial_receive_card(
+                                ui,
+                                &mut receiver_secret,
+                                &cmd_tx,
+                                &self.received_handshake_state,
+                            );
+
+                            if let Some(state) = &self.ui_state {
+                                match *state {
                                     ReceiverUiState::Confirming => {
                                         receive_file_popup(
                                             ui,
@@ -189,8 +206,6 @@ impl AppState {
                                     _ => {}
                                 }
                             }
-
-                            ui.add_space(40.0);
                         });
 
                         // if self.completion_status {
@@ -298,23 +313,72 @@ fn section_box(ui: &mut Ui, title: &str, accent: Color32, add: impl FnOnce(&mut 
         });
 }
 
+fn render_step(
+    ui: &mut egui::Ui,
+    current: &HandShakeState,
+    step: &HandShakeState,
+    label: &str,
+    accent: Color32,
+) {
+    let completed = current >= step;
+    timeline_step(ui, completed, label, accent);
+}
+
+fn render_connector(ui: &mut egui::Ui, current: &HandShakeState, next: &HandShakeState) {
+    let completed = current >= next;
+    timeline_connector(ui, completed);
+}
+
 fn sender_status_card(ui: &mut Ui, handshake_state: &HandShakeState, secret_code: &String) {
     ui.set_max_width(1200.0);
 
     let accent = Color32::from_rgb(100, 180, 255);
     let mut clipboard = Clipboard::new().unwrap();
-    // This need to be sent from the backend..
     full_width_box(ui, "Sender", accent, |ui| {
         ui.horizontal(|ui| {
-            timeline_step(ui, handshake_state.initialzed_status, "Initialized", accent);
-            timeline_connector(ui, handshake_state.initialzed_status);
-            timeline_step(ui, handshake_state.secret_status, "Secret", accent);
-            timeline_connector(ui, handshake_state.secret_status);
-            timeline_step(ui, handshake_state.handshake_status, "Handshake", accent);
-            timeline_connector(ui, handshake_state.handshake_status);
-            timeline_step(ui, handshake_state.sending_status, "Sending", accent);
-            timeline_connector(ui, handshake_state.sending_status);
-            timeline_step(ui, handshake_state.completion_status, "Done", accent);
+            render_step(
+                ui,
+                handshake_state,
+                &HandShakeState::Initialzed,
+                "Initialized",
+                accent,
+            );
+            render_connector(ui, handshake_state, &HandShakeState::Secret);
+
+            render_step(
+                ui,
+                handshake_state,
+                &HandShakeState::Secret,
+                "Secret",
+                accent,
+            );
+            render_connector(ui, handshake_state, &HandShakeState::Handshake);
+
+            render_step(
+                ui,
+                handshake_state,
+                &HandShakeState::Handshake,
+                "Handshake",
+                accent,
+            );
+            render_connector(ui, handshake_state, &HandShakeState::Sending);
+
+            render_step(
+                ui,
+                handshake_state,
+                &HandShakeState::Sending,
+                "Sending",
+                accent,
+            );
+            render_connector(ui, handshake_state, &HandShakeState::Completed);
+
+            render_step(
+                ui,
+                handshake_state,
+                &HandShakeState::Completed,
+                "Done",
+                accent,
+            );
         });
     });
 
@@ -379,23 +443,18 @@ fn sender_card_single_box(
         });
 
         ui.add_space(16.0);
-
-        ui.vertical(|ui| {
-            ui.set_max_width(360.0);
-
-            section_box(ui, "Network", accent, |ui| {
-                Grid::new("send_net_grid")
-                    .spacing([20.0, 8.0])
-                    .show(ui, |ui| {
-                        grid_row(ui, "Local Addr:", "192.168.1.105:8080");
-                        grid_row(ui, "Protocol:", "TCP");
-                        grid_row(ui, "Security:", "TLS 1.3");
-                    });
-            });
-        });
     });
 
     ui.add_space(12.0);
+}
+
+fn progress_bar(ui: &mut Ui, progress: &TransferProgress) {
+    ui.add(egui::ProgressBar::new(progress.fraction()).text(format!(
+        "{:.1}% ({}/{})",
+        progress.percent(),
+        progress.sent,
+        progress.total
+    )));
 }
 
 use crate::state::ReceiverState;
@@ -413,20 +472,21 @@ fn receive_file_popup(
     let hash = if let Some(hash) = file_hash.hash {
         format!("{}", hash)
     } else {
-        format!("Computing Hash..")
+        "Computing Hash..".to_string()
     };
 
-    if let Some(metadata) = metadata {
-        egui::Window::new("Incoming File")
-            .collapsible(false)
-            .resizable(false)
-            .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
-            .show(ctx, |ui| {
-                ui.set_min_width(360.0);
+    let mut window_open = true;
+    egui::Window::new("Incoming File")
+        .open(&mut window_open)
+        .collapsible(false)
+        .resizable(false)
+        .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
+        .show(ctx, |ui| {
+            ui.set_min_width(360.0);
+            ui.add_space(8.0);
 
-                ui.add_space(8.0);
-
-                Grid::new("recv_file_popup_grid")
+            if let Some(metadata) = metadata {
+                Grid::new(ui.id().with("recv_file_popup_grid"))
                     .num_columns(2)
                     .spacing([20.0, 8.0])
                     .show(ui, |ui| {
@@ -437,72 +497,143 @@ fn receive_file_popup(
                     });
 
                 ui.add_space(12.0);
-
                 ui.label(
                     RichText::new("BLAKE3 Hash")
                         .size(10.0)
                         .color(Color32::from_rgb(120, 120, 140)),
                 );
-
                 hash_display(ui, &hash, accent);
 
                 ui.add_space(16.0);
 
                 ui.horizontal(|ui| {
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        let cancel = ui.button("Cancel");
-                        let continue_btn = ui.button("Continue");
-
-                        if continue_btn.clicked() {
-                            cmd_tx.send(Command::Decision(Decision::Accept));
+                        if ui.button("Continue").clicked() {
+                            let _ = cmd_tx.send(Command::Decision(Decision::Accept));
                         }
-
-                        if cancel.clicked() {
-                            cmd_tx.send(Command::Decision(Decision::Reject));
+                        if ui.button("Cancel").clicked() {
+                            let _ = cmd_tx.send(Command::Decision(Decision::Reject));
                         }
                     });
                 });
-            });
-        ui.add_space(12.0);
-    }
+            } else {
+                ui.label("Waiting for metadata...");
+            }
+        });
+    ui.add_space(12.0);
 }
 
-fn initial_receive_card(ui: &mut Ui, secret: &mut String, cmd_tx: &Sender<Command>) {
-    let accent = Color32::from_rgb(180, 100, 255);
+fn render_receive_step(
+    ui: &mut egui::Ui,
+    current: &ReceiveHandShakeState,
+    step: &ReceiveHandShakeState,
+    label: &str,
+    accent: Color32,
+) {
+    let completed = current >= step;
+    timeline_step(ui, completed, label, accent);
+}
 
+fn render_receive_connector(
+    ui: &mut egui::Ui,
+    current: &ReceiveHandShakeState,
+    next: &ReceiveHandShakeState,
+) {
+    let completed = current >= next;
+    timeline_connector(ui, completed);
+}
+
+fn initial_receive_card(
+    ui: &mut Ui,
+    secret: &mut String,
+    cmd_tx: &Sender<Command>,
+    handshake_state: &Option<ReceiveHandShakeState>,
+) {
+    let accent = Color32::from_rgb(180, 100, 255);
     ui.set_max_width(1000.0);
 
     full_width_box(ui, "Receiver", accent, |ui| {
-        ui.horizontal(|ui| {
-            timeline_step(ui, true, "Initialized", accent);
-            timeline_connector(ui, true);
-            timeline_step(ui, true, "Secret", accent);
-            timeline_connector(ui, true);
-            timeline_step(ui, true, "Handshake", accent);
-            timeline_connector(ui, true);
-            timeline_step(ui, true, "Receiving", accent);
-            timeline_connector(ui, false);
-            timeline_step(ui, false, "Done", accent);
-        });
+        if let Some(handshake_state) = handshake_state {
+            ui.horizontal(|ui| {
+                render_receive_step(
+                    ui,
+                    &handshake_state,
+                    &ReceiveHandShakeState::Initialized,
+                    "Initialized",
+                    accent,
+                );
+                render_receive_connector(
+                    ui,
+                    &handshake_state,
+                    &ReceiveHandShakeState::PublicKeySent,
+                );
+
+                render_receive_step(
+                    ui,
+                    &handshake_state,
+                    &ReceiveHandShakeState::PublicKeySent,
+                    "PublicKey Sent",
+                    accent,
+                );
+                render_receive_connector(
+                    ui,
+                    &handshake_state,
+                    &ReceiveHandShakeState::PublicKeyReceived,
+                );
+
+                render_receive_step(
+                    ui,
+                    &handshake_state,
+                    &ReceiveHandShakeState::PublicKeyReceived,
+                    "PublicKey Received",
+                    accent,
+                );
+                render_receive_connector(
+                    ui,
+                    &handshake_state,
+                    &ReceiveHandShakeState::DeriveSharedSecret,
+                );
+
+                render_receive_step(
+                    ui,
+                    &handshake_state,
+                    &ReceiveHandShakeState::DeriveSharedSecret,
+                    "Derived SharedSecret",
+                    accent,
+                );
+                render_receive_connector(
+                    ui,
+                    &handshake_state,
+                    &ReceiveHandShakeState::DeriveTranscript,
+                );
+
+                render_receive_step(
+                    ui,
+                    &handshake_state,
+                    &ReceiveHandShakeState::DeriveTranscript,
+                    "Derived Transcript",
+                    accent,
+                );
+            });
+        }
 
         ui.add_space(12.0);
-        ui.separator();
 
         section_box(ui, "Transfer authentication", accent, |ui| {
             ui.horizontal(|ui| {
                 ui.add(
                     TextEdit::singleline(secret)
                         .font(FontId::monospace(20.0))
-                        .desired_width(320.0)
-                        .hint_text("XXXX-XXXX-XXXX"),
+                        .desired_width(800.0)
+                        .hint_text("XXXX-XXXX-XXXX-XXXX-XXXX-XXXX-XXXX-XXXX-XXXX-XXXX-XXXX-XXXX"),
                 );
-                ui.add_space(12.0);
+                ui.add_space(0.0);
 
                 if action_button_compact(ui, "Authenticate", accent).clicked() {
                     let receiver = Command::StartReciver {
                         code: secret.clone(),
                     };
-                    cmd_tx.send(receiver);
+                    let _ = cmd_tx.send(receiver);
                 }
 
                 ui.add_space(12.0);
@@ -522,47 +653,38 @@ fn receiver_card_single_box(
     ctx: &Context,
 ) {
     let accent = Color32::from_rgb(180, 100, 255);
-
     ui.set_max_width(1000.0);
 
     full_width_box(ui, "Receiver", accent, |ui| {
         let hash = if let Some(hash) = file_hash.hash {
             format!("{}", hash)
         } else {
-            format!("Computing Hash..")
+            "Computing Hash..".to_string()
         };
 
-        if let Some(metadata) = metadata {
-            ui.horizontal(|ui| {
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    section_box(ui, "Incoming file", accent, |ui| {
-                        ui.add_space(8.0);
+        ui.horizontal(|ui| {
+            ui.vertical(|ui| {
+                ui.set_max_width(620.0);
 
-                        Grid::new("recv_file_grid")
-                            .num_columns(2)
+                if let Some(metadata) = metadata {
+                    section_box(ui, "File information", accent, |ui| {
+                        Grid::new("send_file_grid")
                             .spacing([20.0, 8.0])
                             .show(ui, |ui| {
                                 grid_row(ui, "Name:", &metadata.name);
+                                grid_row(ui, "Path:", &metadata.path);
                                 grid_row(ui, "Size:", &metadata.size);
                                 grid_row(ui, "Type:", &metadata.file_type);
+                                grid_row(ui, "Hash:", &hash);
+                                grid_row(ui, "Last Modified:", &metadata.modified_date);
                             });
-
-                        ui.add_space(12.0);
-                        ui.label(
-                            RichText::new("BLAKE3 Hash:")
-                                .size(10.0)
-                                .color(Color32::from_rgb(120, 120, 140)),
-                        );
-
-                        hash_display(ui, &hash, accent);
-
-                        ui.add_space(12.0);
                     });
-                });
+                }
+
+                ui.add_space(16.0);
             });
-            ui.add_space(12.0);
-            // Add progress bar and the local storage information..
-        }
+        });
+        ui.add_space(12.0);
     });
 }
 

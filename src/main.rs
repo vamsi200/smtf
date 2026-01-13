@@ -50,13 +50,16 @@ fn main() -> Result<(), Error> {
         handshake_data: None,
         completion_status: false,
         ui_state: None,
+        transfer_progress: None,
+        received_handshake_state: None,
     };
+    let cmd_tx_clone = cmd_tx.clone();
 
     std::thread::spawn(move || {
-        entry_point(ev_tx, cmd_rx, rec_tx, ui_tx).unwrap();
+        entry_point(ev_tx, cmd_rx, rec_tx, ui_tx).expect("entry is closed unexpectedly");
     });
 
-    ui::AppState::app(app_state, ev_rx, cmd_tx, rec_rx, ui_rx).expect("Failed to start gui");
+    ui::AppState::app(app_state, ev_rx, cmd_tx_clone, rec_rx, ui_rx).expect("Failed to start gui");
 
     // transfer_code.secret.zeroize();
     Ok(())
@@ -71,38 +74,47 @@ pub fn entry_point(
     let mut state = BackendState::Idle;
 
     loop {
-        match cmd_rx.recv()? {
-            Command::StartSender { file_path } => {
-                if let BackendState::Sending(task) = state {
-                    task.cancel.store(true, Ordering::Relaxed);
-                    task.handle.join().unwrap();
+        match cmd_rx.recv() {
+            Ok(cmd) => match cmd {
+                Command::StartSender { file_path } => {
+                    if let BackendState::Sending(task) = state {
+                        task.cancel.store(true, Ordering::Relaxed);
+                        task.handle
+                            .join()
+                            .expect("failed to complete the sender task");
+                    }
+                    let new_task =
+                        sender(ev_tx.clone(), file_path).expect("Failed to get sender task");
+                    state = BackendState::Sending(new_task);
                 }
-                let new_task = sender(ev_tx.clone(), file_path).expect("Failed to get sender task");
-                state = BackendState::Sending(new_task);
-            }
-            Command::StartReciver { code } => {
-                if let BackendState::Sending(task) = state {
-                    task.cancel.store(true, Ordering::Relaxed);
-                    task.handle.join().unwrap();
+                Command::StartReciver { code } => {
+                    if let BackendState::Sending(task) = state {
+                        task.cancel.store(true, Ordering::Relaxed);
+                        task.handle
+                            .join()
+                            .expect("Failed to complete the reciever task");
+                    }
+                    let transfer_code = decode(&code)?;
+                    let new_task = receiver(transfer_code, rec_tx.clone(), ui_tx.clone())?;
+                    state = BackendState::Receving(new_task);
                 }
-                let transfer_code = decode(&code)?;
-                let new_task = receiver(transfer_code, rec_tx.clone(), ui_tx.clone())?;
-                state = BackendState::Receving(new_task);
-            }
-            Command::Decision(decision) => {
-                if let BackendState::Receving(task) = &state {
-                    let _ = task.decision_tx.send(decision);
+                Command::Decision(decision) => {
+                    if let BackendState::Receving(task) = &state {
+                        let _ = task.decision_tx.send(decision);
+                    }
                 }
-            }
-            Command::Cancel => {
-                if let BackendState::Sending(task) = state {
-                    task.cancel.store(true, Ordering::Relaxed);
-                    let _ = task.handle.join();
-                    state = BackendState::Idle;
+                Command::Cancel => {
+                    if let BackendState::Sending(task) = state {
+                        task.cancel.store(true, Ordering::Relaxed);
+                        let _ = task.handle.join();
+                        state = BackendState::Idle;
+                    }
                 }
-            }
-            Command::Close => {
-                return Ok(());
+                _ => {}
+            },
+            Err(err) => {
+                info!("Receive Error..");
+                return Err(anyhow::Error::new(err));
             }
         }
     }

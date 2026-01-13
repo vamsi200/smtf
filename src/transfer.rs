@@ -6,14 +6,14 @@ use std::{
     fs::File,
     io::{Read, Seek, SeekFrom, Write},
     net::TcpStream,
-    sync::{Arc, Mutex},
+    sync::{mpsc::Sender, Arc, Mutex},
 };
 
 use crate::{
     crypto::{decrypt_data, encrypt_data},
     handshake::{receive_nonce, send_nonce},
     helper::PREHASH_LIMIT,
-    state::FileMetadata,
+    state::{FileMetadata, ReceiverState, SenderEvent, TransferProgress},
 };
 
 // to handle the Eof problem
@@ -27,10 +27,13 @@ pub fn send_file(
     stream: &mut TcpStream,
     sender_key: [u8; 32],
     hash: Option<Hash>,
+    ev_tx: Sender<SenderEvent>,
 ) -> Hash {
     let mut buf = [0u8; 512 * 1024];
     let mut hasher = blake3::Hasher::new();
     file.seek(SeekFrom::Start(0)).expect("Failed to Seek");
+    let file_size = file.metadata().unwrap().len();
+    let mut delta = 0;
 
     // all this just to not check the hasher on every iteration
     if hash.is_none() {
@@ -44,6 +47,14 @@ pub fn send_file(
 
             hasher.update(&mut buf[..n]);
             let plain_text_len = n as u32;
+            delta += plain_text_len as usize;
+
+            let transfer_progress = TransferProgress {
+                total: file_size,
+                sent: delta,
+            };
+
+            ev_tx.send(SenderEvent::Trasnfer(transfer_progress));
             let (encrypted_chunks, nonce) = encrypt_data(sender_key, &buf[..n]);
 
             let data_start = MsgType::Data as u8;
@@ -69,6 +80,13 @@ pub fn send_file(
 
             let plain_text_len = n as u32;
             let (encrypted_chunks, nonce) = encrypt_data(sender_key, &buf[..n]);
+            delta += plain_text_len as usize;
+
+            let transfer_progress = TransferProgress {
+                total: file_size,
+                sent: delta,
+            };
+            ev_tx.send(SenderEvent::Trasnfer(transfer_progress));
 
             let data_start = MsgType::Data as u8;
             stream.write_all(&[data_start]);
@@ -96,7 +114,10 @@ pub fn receive_file(
     stream: &mut TcpStream,
     receiver_key: [u8; 32],
     file: &mut File,
+    ev_tx: &Sender<ReceiverState>,
 ) -> Result<(), Error> {
+    let mut delta: usize = 0;
+
     loop {
         let mut msg = [0u8; 1];
         if stream.read_exact(&mut msg).is_err() {
@@ -124,6 +145,10 @@ pub fn receive_file(
                 stream.read_exact(&mut buf)?;
 
                 let decrypted = decrypt_data(buf, nonce, receiver_key);
+                delta += decrypted.len() as usize;
+
+                ev_tx.send(ReceiverState::ReceivedBytes(delta));
+
                 file.write_all(&decrypted)?;
             }
             _ => {}

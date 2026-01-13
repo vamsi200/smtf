@@ -51,13 +51,13 @@ pub enum DestinationState {
     Error(String),
 }
 
-#[derive(Clone, Debug)]
-pub struct HandShakeState {
-    pub initialzed_status: bool,
-    pub secret_status: bool,
-    pub handshake_status: bool,
-    pub sending_status: bool,
-    pub completion_status: bool,
+#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub enum HandShakeState {
+    Initialzed,
+    Secret,
+    Handshake,
+    Sending,
+    Completed,
 }
 
 #[derive(Clone, Debug)]
@@ -93,11 +93,32 @@ pub enum Command {
     Decision(Decision),
 }
 
+#[derive(Debug, PartialEq, PartialOrd)]
+pub struct TransferProgress {
+    pub total: u64,
+    pub sent: usize,
+}
+
+impl TransferProgress {
+    pub fn fraction(&self) -> f32 {
+        if self.total == 0 {
+            0.0
+        } else {
+            self.sent as f32 / self.total as f32
+        }
+    }
+
+    pub fn percent(&self) -> f32 {
+        self.fraction() * 100.0
+    }
+}
+
 pub enum SenderEvent {
     ListenerStarted(SocketAddr),
     HandshakeDerived(HandshakeData),
     HandshakeState(HandShakeState),
     FileData(FileMetadata),
+    Trasnfer(TransferProgress),
     FileHash(FileHash),
     SecretValue(String),
     PeerConnected(SocketAddr),
@@ -113,8 +134,22 @@ pub enum SenderEvent {
     Error(String),
 }
 
+// maybe add cancel later
+#[derive(PartialEq, PartialOrd, Debug)]
+pub enum ReceiveHandShakeState {
+    Initialized,
+    PublicKeySent,
+    PublicKeyReceived,
+    DeriveSharedSecret,
+    DeriveTranscript,
+    DeriveSessionKeys,
+    HandshakeCompleted,
+}
+
 pub enum ReceiverState {
     SecretValue(String),
+    HandshakeState(ReceiveHandShakeState),
+    ReceivedBytes(usize),
     SendSecret,
     SecretVerified,
     PublicKeySent,

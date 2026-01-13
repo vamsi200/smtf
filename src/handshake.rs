@@ -90,11 +90,16 @@ pub fn gen_human_readable_transfer_code(encoded_data: &str) -> String {
 }
 
 pub fn parse_transfer_code(transfer_code: &String) -> RawTransferCode {
-    transfer_code
-        .split_terminator('-')
-        .into_iter()
-        .collect::<Vec<_>>()
-        .concat()
+    if transfer_code.contains("-") {
+        transfer_code
+            .split_terminator('-')
+            .into_iter()
+            .collect::<Vec<_>>()
+            .concat()
+    } else {
+        eprintln!("Invalid Secret");
+        exit(1); // do something else..
+    }
 }
 
 // Sender
@@ -114,7 +119,8 @@ pub fn encode(socket: SocketAddr) -> Result<HumanReadableTransferCode, Error> {
 // Receiver
 pub fn decode(encoded_data: &HumanReadableTransferCode) -> Result<TransferCode, Error> {
     let raw = parse_transfer_code(encoded_data);
-    let mut s = base32::decode(base32::Alphabet::Crockford, &raw).unwrap();
+    let mut s = base32::decode(base32::Alphabet::Crockford, &raw)
+        .expect("Failed to decode, invalid secret");
     let pos = s.len() - 16;
     let split = s.split_at(pos);
     let socket_addr_str = str::from_utf8(split.0).unwrap();
@@ -134,7 +140,8 @@ type Connection = (TcpStream, SocketAddr);
 use crate::helper::{get_file_hash, get_file_metadata, get_socket_addr, PREHASH_LIMIT};
 use crate::state::{
     self, BackendState, Command, FileHash, FileMetadata, HandShakeState, HandshakeData,
-    ReceiverState, ReceiverTask, ReceiverUiState, SenderEvent, Task,
+    ReceiveHandShakeState, ReceiverState, ReceiverTask, ReceiverUiState, SenderEvent, Task,
+    TransferProgress,
 };
 use crate::transfer::{
     self, receive_file, receive_hash, receive_metadata, send_file, send_file_metadata, send_hash,
@@ -150,13 +157,7 @@ pub fn sender(ev_tx: mpsc::Sender<SenderEvent>, file_path: PathBuf) -> Result<Ta
     let secret_code = encode(socket_addr).expect("error");
     let transfer_code = decode(&secret_code).expect("error");
 
-    let mut hand_shake_state = HandShakeState {
-        initialzed_status: true,
-        secret_status: true,
-        handshake_status: false,
-        sending_status: false,
-        completion_status: false,
-    };
+    ev_tx.send(SenderEvent::HandshakeState(HandShakeState::Initialzed));
 
     let handshake_data = HandshakeData {
         cwd: cwd,
@@ -172,7 +173,9 @@ pub fn sender(ev_tx: mpsc::Sender<SenderEvent>, file_path: PathBuf) -> Result<Ta
     let file_metadata = get_file_metadata(&file, &file_path)?;
     let socket_addr = socket_addr;
     let listener = TcpListener::bind(socket_addr).expect("Failed to start the listener");
+    let file_size_bytes = file.metadata().unwrap().len();
 
+    ev_tx.send(SenderEvent::HandshakeState(HandShakeState::Secret));
     ev_tx.send(SenderEvent::FileData(file_metadata.clone()));
 
     info!("listener started - {}", listener.local_addr()?);
@@ -192,9 +195,6 @@ pub fn sender(ev_tx: mpsc::Sender<SenderEvent>, file_path: PathBuf) -> Result<Ta
         }));
         Some(file_hash)
     };
-    ev_tx
-        .send(SenderEvent::HandshakeState(hand_shake_state))
-        .inspect_err(|e| eprintln!("{e}"));
 
     ev_tx
         .send(SenderEvent::HandshakeDerived(handshake_data))
@@ -234,6 +234,8 @@ pub fn sender(ev_tx: mpsc::Sender<SenderEvent>, file_path: PathBuf) -> Result<Ta
                                 derive_session_keys(&shared_secret, &transcript, Mode::Sender)
                                     .expect("Failed to derive keys");
 
+                            ev_tx.send(SenderEvent::HandshakeState(HandShakeState::Handshake));
+
                             info!("Sending File Metatdata..");
                             if let Ok(_) = send_file_metadata(&mut stream, file_metadata) {
                                 info!("Sending hash to the receiver..");
@@ -243,17 +245,25 @@ pub fn sender(ev_tx: mpsc::Sender<SenderEvent>, file_path: PathBuf) -> Result<Ta
                                     receive_decision(&mut stream).expect("Failed to get decision");
                                 match decision {
                                     Decision::Accept => {
+                                        ev_tx.send(SenderEvent::HandshakeState(
+                                            HandShakeState::Sending,
+                                        ));
                                         let file_hash = send_file(
                                             &mut file,
                                             &mut stream,
                                             session_keys.sender_key,
                                             hash,
+                                            ev_tx.clone(),
                                         );
+
+                                        ev_tx.send(SenderEvent::HandshakeState(
+                                            HandShakeState::Completed,
+                                        ));
 
                                         if hash.is_none() {
                                             info!(
                                         "File exceeded the pre-hash limit, sending the hash now.."
-                                    );
+                                        );
                                             send_hash(Some(file_hash), &mut stream);
                                             let file_hash = FileHash {
                                                 hash: Some(file_hash),
@@ -376,88 +386,105 @@ pub fn start_receiver(
     if let Ok(mut stream) = TcpStream::connect(socket_addr) {
         info!("Connected to {socket_addr:?}");
 
+        cmd_tx.send(ReceiverState::HandshakeState(
+            ReceiveHandShakeState::Initialized,
+        ));
+
         if let Ok(_) = send_secret(&mut stream, secret.clone()) {
-            cmd_tx.send(ReceiverState::SendSecret);
-        }
+            info!("Trying to get Sender's PublicKey");
 
-        info!("Trying to get Sender's PublicKey");
+            let state = generate_key_state();
+            if let Ok(peer_public_key) = receive_public_key(&mut stream) {
+                assert_ne!(peer_public_key.as_bytes(), state.public_key.as_bytes());
 
-        let state = generate_key_state();
-        if let Ok(peer_public_key) = receive_public_key(&mut stream) {
-            cmd_tx.send(ReceiverState::PublicKeyReceived);
-            assert_ne!(peer_public_key.as_bytes(), state.public_key.as_bytes());
+                cmd_tx.send(ReceiverState::HandshakeState(
+                    ReceiveHandShakeState::PublicKeyReceived,
+                ));
 
-            info!("PublicKey received successfully!");
+                info!("PublicKey received successfully!");
 
-            if let Ok(_) = send_public_key(&mut stream, &state.public_key) {
-                cmd_tx.send(ReceiverState::PublicKeySent);
+                if let Ok(_) = send_public_key(&mut stream, &state.public_key) {
+                    info!("PublicKey sent successfully!");
 
-                info!("PublicKey sent successfully!");
+                    cmd_tx.send(ReceiverState::HandshakeState(
+                        ReceiveHandShakeState::PublicKeySent,
+                    ));
 
-                let shared_secret = derive_shared_secret(state.private_key, peer_public_key);
+                    let shared_secret = derive_shared_secret(state.private_key, peer_public_key);
 
-                cmd_tx.send(ReceiverState::DeriveSharedSecret);
+                    cmd_tx.send(ReceiverState::HandshakeState(
+                        ReceiveHandShakeState::DeriveSharedSecret,
+                    ));
 
-                let transcript = derive_transcript(peer_public_key, state.public_key, &secret);
+                    let transcript = derive_transcript(peer_public_key, state.public_key, &secret);
 
-                cmd_tx.send(ReceiverState::DeriveTranscript);
+                    info!("Derived Transcript..");
 
-                info!("Derived Transcript..");
+                    cmd_tx.send(ReceiverState::HandshakeState(
+                        ReceiveHandShakeState::DeriveTranscript,
+                    ));
 
-                let session_keys = derive_session_keys(&shared_secret, &transcript, Mode::Receiver)
-                    .expect("error");
+                    let session_keys =
+                        derive_session_keys(&shared_secret, &transcript, Mode::Receiver)
+                            .expect("error");
 
-                info!("Derived Session Keys");
+                    info!("Derived Session Keys");
 
-                cmd_tx.send(ReceiverState::DeriveSessionKeys);
+                    cmd_tx.send(ReceiverState::HandshakeState(
+                        ReceiveHandShakeState::DeriveSessionKeys,
+                    ));
 
-                if let Ok(file_metadata) = receive_metadata(&mut stream) {
-                    let hash = receive_hash(&mut stream).expect("error");
-                    let hash_state = FileHash { hash: hash };
+                    if let Ok(file_metadata) = receive_metadata(&mut stream) {
+                        let hash = receive_hash(&mut stream).expect("error");
+                        let hash_state = FileHash { hash: hash };
 
-                    cmd_tx.send(ReceiverState::FileHash(hash_state));
+                        cmd_tx.send(ReceiverState::FileHash(hash_state));
 
-                    info!("Received File Metatdata");
-                    cmd_tx.send(ReceiverState::FileState(file_metadata.clone()));
+                        info!("Received File Metatdata");
+                        cmd_tx.send(ReceiverState::FileState(file_metadata.clone()));
 
-                    let file_name = file_metadata.name;
+                        let file_name = file_metadata.name;
 
-                    ui_tx.send(ReceiverUiState::Confirming);
+                        ui_tx.send(ReceiverUiState::Confirming);
 
-                    while let Ok(decision) = decision_rx.recv() {
-                        match decision {
-                            Decision::Accept => {
-                                if let Some(file_path) = FileDialog::new()
-                                    .set_title("Save File")
-                                    .set_file_name(file_name.clone())
-                                    .save_file()
-                                {
-                                    if let Ok(_) = send_decision(&mut stream, Decision::Accept) {
-                                        ui_tx.send(ReceiverUiState::Receiving);
-                                        let mut file = File::create(file_path).expect("error");
-                                        cmd_tx.send(ReceiverState::RecieveStarted);
+                        while let Ok(decision) = decision_rx.recv() {
+                            match decision {
+                                Decision::Accept => {
+                                    if let Some(file_path) = FileDialog::new()
+                                        .set_title("Save File")
+                                        .set_file_name(file_name.clone())
+                                        .save_file()
+                                    {
+                                        if let Ok(_) = send_decision(&mut stream, Decision::Accept)
+                                        {
+                                            ui_tx.send(ReceiverUiState::Receiving);
+                                            let mut file = File::create(file_path).expect("error");
+                                            cmd_tx.send(ReceiverState::RecieveStarted);
 
-                                        if let Ok(_) = receive_file(
-                                            &mut stream,
-                                            session_keys.receiver_key,
-                                            &mut file,
-                                        ) {
-                                            cmd_tx.send(ReceiverState::RecieveCompleted);
-                                            if hash.is_none() {
-                                                info!("File exceeded the pre-hash limit, Trying to recieve the hash..");
-                                                let hash =
-                                                    receive_hash(&mut stream).expect("error");
-                                                let hash_state = FileHash { hash: hash };
-                                                cmd_tx.send(ReceiverState::FileHash(hash_state));
+                                            if let Ok(_) = receive_file(
+                                                &mut stream,
+                                                session_keys.receiver_key,
+                                                &mut file,
+                                                &cmd_tx,
+                                            ) {
+                                                cmd_tx.send(ReceiverState::RecieveCompleted);
+                                                if hash.is_none() {
+                                                    info!("File exceeded the pre-hash limit, Trying to recieve the hash..");
+                                                    let hash =
+                                                        receive_hash(&mut stream).expect("error");
+                                                    let hash_state = FileHash { hash: hash };
+                                                    cmd_tx
+                                                        .send(ReceiverState::FileHash(hash_state));
+                                                }
                                             }
                                         }
                                     }
                                 }
-                            }
-                            Decision::Reject => {
-                                send_decision(&mut stream, Decision::Reject)
-                                    .expect("failed to send decision");
-                                stream.shutdown(Shutdown::Both);
+                                Decision::Reject => {
+                                    send_decision(&mut stream, Decision::Reject)
+                                        .expect("failed to send decision");
+                                    stream.shutdown(Shutdown::Both);
+                                }
                             }
                         }
                     }
