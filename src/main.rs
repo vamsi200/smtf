@@ -2,7 +2,7 @@
 #![allow(unused_variables)]
 #![allow(unused_imports)]
 
-use anyhow::Error;
+use anyhow::{Error, Ok};
 use eframe::{Frame, NativeOptions};
 use egui::{Context, FontData, FontDefinitions, Grid, Stroke};
 use log::info;
@@ -45,6 +45,8 @@ fn main() -> Result<(), Error> {
 
     let app_state = AppState {
         handshake_state: None,
+        is_sent: false,
+        is_sending: false,
         file_metadata: None,
         file_hash: FileHash { hash: None },
         handshake_data: None,
@@ -53,13 +55,12 @@ fn main() -> Result<(), Error> {
         transfer_progress: None,
         received_handshake_state: None,
     };
-    let cmd_tx_clone = cmd_tx.clone();
 
     std::thread::spawn(move || {
         entry_point(ev_tx, cmd_rx, rec_tx, ui_tx).expect("entry is closed unexpectedly");
     });
 
-    ui::AppState::app(app_state, ev_rx, cmd_tx_clone, rec_rx, ui_rx).expect("Failed to start gui");
+    ui::AppState::app(app_state, ev_rx, cmd_tx, rec_rx, ui_rx).expect("Failed to start gui");
 
     // transfer_code.secret.zeroize();
     Ok(())
@@ -75,7 +76,7 @@ pub fn entry_point(
 
     loop {
         match cmd_rx.recv() {
-            Ok(cmd) => match cmd {
+            std::result::Result::Ok(cmd) => match cmd {
                 Command::StartSender { file_path } => {
                     if let BackendState::Sending(task) = state {
                         task.cancel.store(true, Ordering::Relaxed);
@@ -108,6 +109,13 @@ pub fn entry_point(
                         task.cancel.store(true, Ordering::Relaxed);
                         let _ = task.handle.join();
                         state = BackendState::Idle;
+                        info!("Called cancel on sender");
+                    }
+                    if let BackendState::Receving(task) = state {
+                        task.cancel.store(true, Ordering::Relaxed);
+                        let _ = task.handle.join();
+                        state = BackendState::Idle;
+                        info!("Called cancel on receiver");
                     }
                 }
                 _ => {}

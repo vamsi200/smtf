@@ -3,7 +3,7 @@
 use std::{
     net::SocketAddr,
     path::PathBuf,
-    sync::{atomic::AtomicBool, Arc},
+    sync::{atomic::AtomicBool, mpsc, Arc},
     thread::JoinHandle,
 };
 
@@ -52,15 +52,6 @@ pub enum DestinationState {
     Error(String),
 }
 
-#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord)]
-pub enum HandShakeState {
-    Initialzed,
-    Secret,
-    Handshake,
-    Sending,
-    Completed,
-}
-
 #[derive(Clone, Debug)]
 pub struct HandshakeData {
     pub cwd: PathBuf,
@@ -83,6 +74,7 @@ pub enum BackendState {
 
 pub struct ReceiverTask {
     pub handle: JoinHandle<()>,
+    pub cancel: Arc<AtomicBool>,
     pub decision_tx: std::sync::mpsc::Sender<Decision>,
 }
 
@@ -117,19 +109,12 @@ impl TransferProgress {
 pub enum SenderEvent {
     ListenerStarted(SocketAddr),
     HandshakeDerived(HandshakeData),
-    HandshakeState(HandShakeState),
+    HandshakeState(SenderHandShakeState),
     FileData(FileMetadata),
     Trasnfer(TransferProgress),
     FileHash(FileHash),
     SecretValue(String),
     PeerConnected(SocketAddr),
-    VerifyingSecret,
-    SecretVerified,
-    PublicKeySent,
-    PublicKeyReceived,
-    DeriveSharedSecret,
-    DeriveTranscript,
-    DeriveSessionKeys,
     TransferStarted,
     TransferCompleted,
     Error(String),
@@ -139,6 +124,20 @@ pub enum SenderEvent {
 #[derive(PartialEq, PartialOrd, Debug)]
 pub enum ReceiveHandShakeState {
     Initialized,
+    PublicKeySent,
+    PublicKeyReceived,
+    DeriveSharedSecret,
+    DeriveTranscript,
+    DeriveSessionKeys,
+    HandshakeCompleted,
+}
+
+#[derive(PartialEq, PartialOrd, Debug)]
+pub enum SenderHandShakeState {
+    Initialized,
+    SecretDerived,
+    VerifyingSecret,
+    SecretVerified,
     PublicKeySent,
     PublicKeyReceived,
     DeriveSharedSecret,

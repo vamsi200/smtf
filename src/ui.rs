@@ -2,7 +2,7 @@
 use arboard::Clipboard;
 use blake3::Hash;
 use eframe::NativeOptions;
-use egui::*;
+use egui::{epaint::FontsView, *};
 use log::info;
 use rfd::FileDialog;
 use std::{
@@ -15,17 +15,20 @@ use crate::{
     handshake::{decode, encode, sender, Decision},
     helper::get_socket_addr,
     state::{
-        Command, FileHash, FileMetadata, HandShakeState, HandshakeData, ReceiveHandShakeState,
-        ReceiverUiState, SenderEvent, TransferProgress,
+        Command, FileHash, FileMetadata, HandshakeData, ReceiveHandShakeState, ReceiverUiState,
+        SenderEvent, SenderHandShakeState, TransferProgress,
     },
+    transfer::Outcome,
 };
 
 pub struct AppState {
     pub file_metadata: Option<FileMetadata>,
     pub file_hash: FileHash,
     pub handshake_data: Option<HandshakeData>,
-    pub handshake_state: Option<HandShakeState>,
+    pub handshake_state: Option<SenderHandShakeState>,
     pub completion_status: Option<ReceiverState>,
+    pub is_sending: bool,
+    pub is_sent: bool,
     pub ui_state: Option<ReceiverUiState>,
     pub transfer_progress: Option<TransferProgress>,
     pub received_handshake_state: Option<ReceiveHandShakeState>,
@@ -47,10 +50,8 @@ impl AppState {
         };
 
         let mut mode = Mode::Idle;
-        let transfer_start = Instant::now();
-
         let mut receiver_secret = String::new();
-        let mut save_location = String::from("~/Downloads/example.iso");
+        let mut cancel_confirm = CancelConfirm::default();
 
         eframe::run_simple_native("SMTF", options, move |ctx, _frame| {
             ctx.request_repaint();
@@ -62,6 +63,16 @@ impl AppState {
                 })
                 .show(ctx, |ui| match mode {
                     Mode::Idle => {
+                        self.file_metadata = None;
+                        self.handshake_data = None;
+                        self.handshake_state = None;
+                        self.completion_status = None;
+                        self.is_sending = false;
+                        self.is_sent = false;
+                        self.ui_state = None;
+                        self.transfer_progress = None;
+                        self.received_handshake_state = None;
+
                         ui.vertical_centered(|ui| {
                             ui.add_space(50.0);
                             ui.label(
@@ -86,13 +97,23 @@ impl AppState {
                     }
 
                     Mode::Send => {
-                        top_bar(
+                        let b = top_bar(
                             ui,
                             "SENDER",
                             egui::Color32::from_rgb(100, 180, 255),
                             &mut mode,
                             &cmd_tx,
                         );
+
+                        // should I keep this pattern?
+                        if b {
+                            cancel_confirm.open = true;
+                        }
+
+                        cancel_transfer_popup(ctx, &mut cancel_confirm, true, &mut mode, || {
+                            cmd_tx.send(Command::Cancel);
+                        });
+
                         ui.vertical_centered(|ui| {
                             ui.add_space(30.0);
 
@@ -109,6 +130,8 @@ impl AppState {
                                         self.handshake_state = Some(hs)
                                     }
                                     SenderEvent::Trasnfer(tp) => self.transfer_progress = Some(tp),
+                                    SenderEvent::TransferStarted => self.is_sending = true,
+                                    SenderEvent::TransferCompleted => self.is_sent = true,
                                     _ => {}
                                 }
                             }
@@ -117,30 +140,45 @@ impl AppState {
                             if let (Some(handshake_state), Some(hd)) =
                                 (&self.handshake_state, &self.handshake_data)
                             {
-                                sender_status_card(ui, handshake_state, &hd.secrte_code);
+                                sender_status_card(
+                                    ui,
+                                    handshake_state,
+                                    &hd.secrte_code,
+                                    self.is_sending,
+                                    self.is_sent,
+                                );
                                 ui.add_space(10.0);
                             }
 
                             if let (Some(metadata), (hash), Some(handshake_state)) =
                                 (&self.file_metadata, &self.file_hash, &self.handshake_state)
                             {
-                                sender_card_single_box(ui, &transfer_start, metadata, hash);
+                                sender_card_single_box(ui, metadata, hash);
                             }
 
                             if let Some(tp) = &self.transfer_progress {
                                 progress_bar(ui, &tp);
                             }
+
+                            completion_popup(ctx, ui, self.is_sent, &mut mode);
                         });
                     }
 
                     Mode::Receive => {
-                        top_bar(
+                        let b = top_bar(
                             ui,
                             "RECEIVER",
                             egui::Color32::from_rgb(180, 100, 255),
                             &mut mode,
                             &cmd_tx,
                         );
+                        if b {
+                            cancel_confirm.open = true;
+                        }
+
+                        cancel_transfer_popup(ctx, &mut cancel_confirm, false, &mut mode, || {
+                            cmd_tx.send(Command::Cancel);
+                        });
 
                         while let Ok(ev) = rec_rx.try_recv() {
                             match ev {
@@ -161,6 +199,12 @@ impl AppState {
                                         let tp = TransferProgress {
                                             sent: bytes,
                                             total: meta.raw_bytes,
+                                        };
+                                        self.transfer_progress = Some(tp);
+                                    } else {
+                                        let tp = TransferProgress {
+                                            sent: bytes,
+                                            total: 0,
                                         };
                                         self.transfer_progress = Some(tp);
                                     }
@@ -227,18 +271,46 @@ impl AppState {
                             }
                         });
 
-                        // if self.completion_status {
-                        //     completion_popup(ctx, ui);
-                        // }
+                        completion_popup(
+                            ctx,
+                            ui,
+                            matches!(
+                                self.completion_status,
+                                Some(ReceiverState::RecieveCompleted)
+                            ),
+                            &mut mode,
+                        );
                     }
                 });
         })
     }
 }
 
-pub fn completion_popup(ctx: &Context, ui: &mut Ui) {
-    todo!();
+fn completion_popup(ctx: &Context, ui: &mut Ui, mut is_completed: bool, mode: &mut Mode) {
+    if !is_completed {
+        return;
+    }
+
+    Window::new("Transfer Complete")
+        .collapsible(false)
+        .resizable(false)
+        .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+        .show(ctx, |ui| {
+            ui.vertical_centered(|ui| {
+                ui.add_space(12.0);
+                ui.heading("File received successfully");
+            });
+
+            ui.horizontal(|ui| {
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if ui.button("OK").clicked() {
+                        *mode = Mode::Idle
+                    }
+                });
+            });
+        });
 }
+
 #[derive(PartialEq, Copy, Clone)]
 enum Mode {
     Idle,
@@ -271,36 +343,54 @@ fn mini_action_button(ui: &mut Ui, icon: &str, tooltip: &str) -> Response {
 }
 
 fn timeline_step(ui: &mut egui::Ui, active: bool, label: &str, accent: egui::Color32) {
-    let color = if active {
+    let bg = if active {
         accent
     } else {
-        egui::Color32::from_gray(80)
+        egui::Color32::from_gray(55)
     };
 
-    ui.vertical(|ui| {
-        let size = egui::vec2(48.0, 48.0);
-        let (rect, _) = ui.allocate_exact_size(size, egui::Sense::hover());
-        ui.painter().circle_filled(rect.center(), 24.0, color);
+    let text_color = if active {
+        egui::Color32::BLACK
+    } else {
+        egui::Color32::from_gray(170)
+    };
 
-        ui.add_space(6.0);
+    let font_id = egui::FontId::proportional(11.0);
+    let text = label.to_owned();
 
-        ui.label(
-            egui::RichText::new(label)
-                .size(11.0)
-                .color(egui::Color32::from_gray(170)),
-        );
-    });
+    let galley = ui.painter().layout_no_wrap(
+        label.to_owned(),
+        egui::FontId::proportional(11.0),
+        text_color,
+    );
+
+    let padding = egui::vec2(10.0, 6.0);
+    let size = galley.size() + padding * 2.0;
+
+    let (rect, _) = ui.allocate_exact_size(size, egui::Sense::hover());
+
+    ui.painter()
+        .rect_filled(rect, egui::CornerRadius::same(6), bg);
+
+    ui.painter().text(
+        rect.center(),
+        egui::Align2::CENTER_CENTER,
+        label,
+        font_id,
+        text_color,
+    );
 }
 
 fn timeline_connector(ui: &mut egui::Ui, active: bool) {
     let color = if active {
-        egui::Color32::from_rgb(100, 180, 255)
+        egui::Color32::from_rgb(120, 190, 255)
     } else {
         egui::Color32::from_gray(70)
     };
 
-    let size = egui::vec2(32.0, 4.0);
+    let size = egui::vec2(20.0, 3.0);
     let (rect, _) = ui.allocate_exact_size(size, egui::Sense::hover());
+
     ui.painter()
         .rect_filled(rect, egui::CornerRadius::same(2), color);
 }
@@ -334,8 +424,8 @@ fn section_box(ui: &mut Ui, title: &str, accent: Color32, add: impl FnOnce(&mut 
 
 fn render_step(
     ui: &mut egui::Ui,
-    current: &HandShakeState,
-    step: &HandShakeState,
+    current: &SenderHandShakeState,
+    step: &SenderHandShakeState,
     label: &str,
     accent: Color32,
 ) {
@@ -343,14 +433,22 @@ fn render_step(
     timeline_step(ui, completed, label, accent);
 }
 
-fn render_connector(ui: &mut egui::Ui, current: &HandShakeState, next: &HandShakeState) {
+fn render_connector(
+    ui: &mut egui::Ui,
+    current: &SenderHandShakeState,
+    next: &SenderHandShakeState,
+) {
     let completed = current >= next;
     timeline_connector(ui, completed);
 }
 
-fn sender_status_card(ui: &mut Ui, handshake_state: &HandShakeState, secret_code: &String) {
-    ui.set_max_width(1200.0);
-
+fn sender_status_card(
+    ui: &mut Ui,
+    handshake_state: &SenderHandShakeState,
+    secret_code: &String,
+    is_sending: bool,
+    is_sent: bool,
+) {
     let accent = Color32::from_rgb(100, 180, 255);
     let mut clipboard = Clipboard::new().unwrap();
     full_width_box(ui, "Sender", accent, |ui| {
@@ -358,46 +456,98 @@ fn sender_status_card(ui: &mut Ui, handshake_state: &HandShakeState, secret_code
             render_step(
                 ui,
                 handshake_state,
-                &HandShakeState::Initialzed,
-                "Initialized",
+                &SenderHandShakeState::Initialized,
+                "Handshake Initialized",
                 accent,
             );
-            render_connector(ui, handshake_state, &HandShakeState::Secret);
+            render_connector(ui, handshake_state, &SenderHandShakeState::SecretDerived);
 
             render_step(
                 ui,
                 handshake_state,
-                &HandShakeState::Secret,
-                "Secret",
+                &SenderHandShakeState::SecretDerived,
+                "Secret Derived",
                 accent,
             );
-            render_connector(ui, handshake_state, &HandShakeState::Handshake);
+            render_connector(ui, handshake_state, &SenderHandShakeState::VerifyingSecret);
 
             render_step(
                 ui,
                 handshake_state,
-                &HandShakeState::Handshake,
-                "Handshake",
+                &SenderHandShakeState::VerifyingSecret,
+                "Secret Verification Started",
                 accent,
             );
-            render_connector(ui, handshake_state, &HandShakeState::Sending);
+            render_connector(ui, handshake_state, &SenderHandShakeState::SecretVerified);
 
             render_step(
                 ui,
                 handshake_state,
-                &HandShakeState::Sending,
-                "Sending",
+                &SenderHandShakeState::SecretVerified,
+                "Secret Verified",
                 accent,
             );
-            render_connector(ui, handshake_state, &HandShakeState::Completed);
+            render_connector(ui, handshake_state, &SenderHandShakeState::PublicKeySent);
 
             render_step(
                 ui,
                 handshake_state,
-                &HandShakeState::Completed,
-                "Done",
+                &SenderHandShakeState::PublicKeySent,
+                "Public Key Sent",
                 accent,
             );
+            render_connector(
+                ui,
+                handshake_state,
+                &SenderHandShakeState::PublicKeyReceived,
+            );
+
+            render_step(
+                ui,
+                handshake_state,
+                &SenderHandShakeState::PublicKeyReceived,
+                "Public Key Received",
+                accent,
+            );
+            render_connector(
+                ui,
+                handshake_state,
+                &SenderHandShakeState::DeriveSharedSecret,
+            );
+
+            render_step(
+                ui,
+                handshake_state,
+                &SenderHandShakeState::DeriveSharedSecret,
+                "Shared Secret Derived",
+                accent,
+            );
+            render_connector(ui, handshake_state, &SenderHandShakeState::DeriveTranscript);
+
+            render_step(
+                ui,
+                handshake_state,
+                &SenderHandShakeState::DeriveTranscript,
+                "Transcript Derived",
+                accent,
+            );
+            render_connector(
+                ui,
+                handshake_state,
+                &SenderHandShakeState::HandshakeCompleted,
+            );
+
+            render_step(
+                ui,
+                handshake_state,
+                &SenderHandShakeState::HandshakeCompleted,
+                "Handshake Completed",
+                accent,
+            );
+
+            timeline_step(ui, is_sending, "Transfer Started", accent);
+            timeline_connector(ui, is_sending);
+            timeline_step(ui, is_sent, "Transfer Completed", accent);
         });
     });
 
@@ -424,16 +574,10 @@ fn sender_status_card(ui: &mut Ui, handshake_state: &HandShakeState, secret_code
     });
 }
 
-fn sender_card_single_box(
-    ui: &mut Ui,
-    start_time: &Instant,
-    data: &FileMetadata,
-    file_hash: &FileHash,
-) {
+fn sender_card_single_box(ui: &mut Ui, data: &FileMetadata, file_hash: &FileHash) {
     ui.set_max_width(1000.0);
 
     let accent = Color32::from_rgb(100, 180, 255);
-    let remaining = 300u64.saturating_sub(start_time.elapsed().as_secs());
 
     ui.add_space(12.0);
 
@@ -474,6 +618,78 @@ fn progress_bar(ui: &mut Ui, progress: &TransferProgress) {
         progress.sent,
         progress.total
     )));
+}
+
+#[derive(Default, Clone)]
+pub struct CancelConfirm {
+    pub open: bool,
+}
+
+fn cancel_transfer_popup(
+    ctx: &egui::Context,
+    confirm: &mut CancelConfirm,
+    is_sending: bool,
+    mode: &mut Mode,
+    on_confirm_cancel: impl FnOnce(),
+) {
+    if !confirm.open {
+        return;
+    }
+
+    Window::new("Cancel Transfer?")
+        .collapsible(false)
+        .resizable(false)
+        .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
+        .show(ctx, |ui| {
+            ui.vertical_centered(|ui| {
+                ui.add_space(8.0);
+
+                let action = if is_sending { "sending" } else { "receiving" };
+                let cur_mode = if is_sending {
+                    Mode::Send
+                } else {
+                    Mode::Receive
+                };
+                ui.label(
+                    egui::RichText::new(format!("Are you sure you want to cancel {}?", action))
+                        .size(15.0)
+                        .strong(),
+                );
+
+                ui.add_space(6.0);
+
+                ui.label(
+                    egui::RichText::new("Any partially transferred data will be discarded.")
+                        .color(egui::Color32::from_gray(160)),
+                );
+
+                ui.add_space(14.0);
+
+                ui.horizontal(|ui| {
+                    ui.add_space(20.0);
+
+                    if ui.button("Continue").clicked() {
+                        confirm.open = false;
+                        *mode = cur_mode;
+                    }
+
+                    let cancel_btn = ui.add(
+                        egui::Button::new(
+                            egui::RichText::new("Cancel Transfer").color(egui::Color32::WHITE),
+                        )
+                        .fill(egui::Color32::from_rgb(180, 60, 60)),
+                    );
+
+                    if cancel_btn.clicked() {
+                        confirm.open = false;
+                        on_confirm_cancel();
+                        *mode = Mode::Idle;
+                    }
+                });
+
+                ui.add_space(8.0);
+            });
+        });
 }
 
 use crate::state::ReceiverState;
@@ -580,9 +796,10 @@ fn initial_receive_card(
                     ui,
                     &handshake_state,
                     &ReceiveHandShakeState::Initialized,
-                    "Initialized",
+                    "Handshake Initialized",
                     accent,
                 );
+
                 render_receive_connector(
                     ui,
                     &handshake_state,
@@ -593,9 +810,10 @@ fn initial_receive_card(
                     ui,
                     &handshake_state,
                     &ReceiveHandShakeState::PublicKeySent,
-                    "PublicKey Sent",
+                    "Public Key Sent",
                     accent,
                 );
+
                 render_receive_connector(
                     ui,
                     &handshake_state,
@@ -606,9 +824,10 @@ fn initial_receive_card(
                     ui,
                     &handshake_state,
                     &ReceiveHandShakeState::PublicKeyReceived,
-                    "PublicKey Received",
+                    "Public Key Received",
                     accent,
                 );
+
                 render_receive_connector(
                     ui,
                     &handshake_state,
@@ -619,9 +838,10 @@ fn initial_receive_card(
                     ui,
                     &handshake_state,
                     &ReceiveHandShakeState::DeriveSharedSecret,
-                    "Derived SharedSecret",
+                    "Shared Secret Derived",
                     accent,
                 );
+
                 render_receive_connector(
                     ui,
                     &handshake_state,
@@ -632,7 +852,7 @@ fn initial_receive_card(
                     ui,
                     &handshake_state,
                     &ReceiveHandShakeState::DeriveTranscript,
-                    "Derived Transcript",
+                    "Transcript Derived",
                     accent,
                 );
 
@@ -748,15 +968,16 @@ fn top_bar(
     color: egui::Color32,
     mode: &mut Mode,
     cmd_tx: &Sender<Command>,
-) {
+) -> bool {
+    let mut home_button_clicked = false;
     egui::Frame::new()
         .fill(egui::Color32::from_rgb(16, 16, 22))
         .inner_margin(egui::Margin::symmetric(20, 16))
         .show(ui, |ui| {
             ui.horizontal(|ui| {
                 if home_button(ui).clicked() {
-                    *mode = Mode::Idle;
-                    cmd_tx.send(Command::Cancel);
+                    home_button_clicked = true;
+                    // *mode = Mode::Idle;
                 }
                 ui.add_space(20.0);
                 let (bar_rect, _) =
@@ -766,6 +987,7 @@ fn top_bar(
                 ui.label(egui::RichText::new(title).size(20.0).color(color).strong());
             });
         });
+    home_button_clicked
 }
 
 fn home_button(ui: &mut egui::Ui) -> egui::Response {

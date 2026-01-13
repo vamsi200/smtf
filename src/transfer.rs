@@ -6,7 +6,11 @@ use std::{
     fs::File,
     io::{Read, Seek, SeekFrom, Write},
     net::TcpStream,
-    sync::{mpsc::Sender, Arc, Mutex},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        mpsc::Sender,
+        Arc, Mutex,
+    },
 };
 
 use crate::{
@@ -28,16 +32,23 @@ pub fn send_file(
     sender_key: [u8; 32],
     hash: Option<Hash>,
     ev_tx: Sender<SenderEvent>,
-) -> Hash {
+    cancel: &Arc<AtomicBool>,
+) -> (Hash, Outcome) {
     let mut buf = [0u8; 512 * 1024];
     let mut hasher = blake3::Hasher::new();
     file.seek(SeekFrom::Start(0)).expect("Failed to Seek");
     let file_size = file.metadata().unwrap().len();
     let mut delta = 0;
+    let mut result = Outcome::Completed;
 
     // all this just to not check the hasher on every iteration
     if hash.is_none() {
         while let Ok(n) = file.read(&mut buf) {
+            if cancel.load(Ordering::Relaxed) {
+                result = Outcome::Cancelled;
+                break;
+            }
+
             if n == 0 {
                 let eof_msg = MsgType::Eof as u8;
                 stream.write_all(&[eof_msg]);
@@ -71,6 +82,11 @@ pub fn send_file(
     } else {
         loop {
             let n = file.read(&mut buf).expect("failed to read file");
+            if cancel.load(Ordering::Relaxed) {
+                result = Outcome::Cancelled;
+                break;
+            }
+
             if n == 0 {
                 let eof_msg = MsgType::Eof as u8;
                 stream.write_all(&[eof_msg]);
@@ -107,7 +123,13 @@ pub fn send_file(
         hasher.finalize()
     };
 
-    hash
+    (hash, result)
+}
+
+pub enum Outcome {
+    Completed,
+    Cancelled,
+    Error,
 }
 
 pub fn receive_file(
@@ -115,12 +137,23 @@ pub fn receive_file(
     receiver_key: [u8; 32],
     file: &mut File,
     ev_tx: &Sender<ReceiverState>,
-) -> Result<(), Error> {
+    cancel: &Arc<AtomicBool>,
+) -> Result<Outcome, Error> {
     let mut delta: usize = 0;
+    let mut result = Outcome::Completed;
 
     loop {
         let mut msg = [0u8; 1];
         if stream.read_exact(&mut msg).is_err() {
+            result = Outcome::Error;
+            break;
+        }
+
+        if cancel.load(Ordering::Relaxed) {
+            stream.shutdown(std::net::Shutdown::Read); // this causes connection reset.. do
+                                                       // something else
+            info!("Shutting down receiver..");
+            result = Outcome::Cancelled;
             break;
         }
 
@@ -154,7 +187,7 @@ pub fn receive_file(
             _ => {}
         }
     }
-    Ok(())
+    Ok(result)
 }
 
 pub fn send_file_metadata(stream: &mut TcpStream, metadata: FileMetadata) -> Result<(), Error> {
