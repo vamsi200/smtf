@@ -25,7 +25,7 @@ pub struct AppState {
     pub file_hash: FileHash,
     pub handshake_data: Option<HandshakeData>,
     pub handshake_state: Option<HandShakeState>,
-    pub completion_status: bool,
+    pub completion_status: Option<ReceiverState>,
     pub ui_state: Option<ReceiverUiState>,
     pub transfer_progress: Option<TransferProgress>,
     pub received_handshake_state: Option<ReceiveHandShakeState>,
@@ -148,7 +148,7 @@ impl AppState {
                                     self.file_metadata = Some(meta);
                                 }
                                 ReceiverState::RecieveCompleted => {
-                                    self.completion_status = true;
+                                    self.completion_status = Some(ReceiverState::RecieveCompleted);
                                 }
                                 ReceiverState::FileHash(st) => {
                                     self.file_hash = st;
@@ -156,7 +156,15 @@ impl AppState {
                                 ReceiverState::HandshakeState(hs) => {
                                     self.received_handshake_state = Some(hs);
                                 }
-
+                                ReceiverState::ReceivedBytes(bytes) => {
+                                    if let Some(meta) = &self.file_metadata {
+                                        let tp = TransferProgress {
+                                            sent: bytes,
+                                            total: meta.raw_bytes,
+                                        };
+                                        self.transfer_progress = Some(tp);
+                                    }
+                                }
                                 _ => {}
                             }
                         }
@@ -180,6 +188,11 @@ impl AppState {
                                 &mut receiver_secret,
                                 &cmd_tx,
                                 &self.received_handshake_state,
+                                matches!(self.ui_state, Some(ReceiverUiState::Receiving)),
+                                matches!(
+                                    self.completion_status,
+                                    Some(ReceiverState::RecieveCompleted)
+                                ),
                             );
 
                             if let Some(state) = &self.ui_state {
@@ -202,6 +215,12 @@ impl AppState {
                                             &self.file_hash,
                                             ctx,
                                         );
+
+                                        ui.add_space(10.0);
+
+                                        if let Some(tp) = &self.transfer_progress {
+                                            progress_bar(ui, &tp);
+                                        }
                                     }
                                     _ => {}
                                 }
@@ -548,6 +567,8 @@ fn initial_receive_card(
     secret: &mut String,
     cmd_tx: &Sender<Command>,
     handshake_state: &Option<ReceiveHandShakeState>,
+    is_receiving: bool,
+    received: bool,
 ) {
     let accent = Color32::from_rgb(180, 100, 255);
     ui.set_max_width(1000.0);
@@ -614,6 +635,12 @@ fn initial_receive_card(
                     "Derived Transcript",
                     accent,
                 );
+
+                timeline_connector(ui, is_receiving);
+                timeline_step(ui, is_receiving, "Receiving Started", accent);
+
+                timeline_connector(ui, received);
+                timeline_step(ui, received, "Receiving Completed", accent);
             });
         }
 

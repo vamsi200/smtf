@@ -73,6 +73,7 @@ pub fn get_file_metadata(file: &File, file_path: &PathBuf) -> Result<FileMetadat
     let file_path = file_path.to_str().unwrap_or_default().to_owned();
     let file_size = get_file_size(metadata.len());
     let modified_date = metadata.modified().ok();
+    let raw_file_size = metadata.len();
 
     let modified_date = if let Some(modified) = modified_date {
         match modified.elapsed() {
@@ -99,6 +100,7 @@ pub fn get_file_metadata(file: &File, file_path: &PathBuf) -> Result<FileMetadat
     let file_metadata = FileMetadata {
         name: file_name,
         size: file_size,
+        raw_bytes: raw_file_size,
         file_type: file_type,
         path: file_path,
         modified_date: modified_date,

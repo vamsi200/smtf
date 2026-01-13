@@ -9,7 +9,7 @@ use log::info;
 use rfd::FileDialog;
 use smtf::{
     handshake::{self, *},
-    helper::{self, get_socket_addr},
+    helper::{self, get_file_size, get_socket_addr},
     state::{
         self, BackendState, Command, FileHash, FileMetadata, HandshakeData, ReceiverState,
         ReceiverUiState, SenderEvent,
@@ -48,7 +48,7 @@ fn main() -> Result<(), Error> {
         file_metadata: None,
         file_hash: FileHash { hash: None },
         handshake_data: None,
-        completion_status: false,
+        completion_status: None,
         ui_state: None,
         transfer_progress: None,
         received_handshake_state: None,

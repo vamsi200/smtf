@@ -166,6 +166,10 @@ pub fn send_file_metadata(stream: &mut TcpStream, metadata: FileMetadata) -> Res
     stream.write_all(&size.to_be_bytes())?;
     stream.write_all(&metadata.size.as_bytes())?;
 
+    let raw_size = metadata.raw_bytes.to_be_bytes().len();
+    stream.write_all(&raw_size.to_be_bytes())?;
+    stream.write_all(&metadata.raw_bytes.to_be_bytes())?;
+
     let file_type = metadata.file_type.len() as u16;
     stream.write_all(&file_type.to_be_bytes())?;
     stream.write_all(&metadata.file_type.as_bytes())?;
@@ -194,6 +198,12 @@ pub fn receive_metadata(stream: &mut TcpStream) -> Result<FileMetadata, Error> {
     let mut size = vec![0u8; size_len];
     stream.read_exact(&mut size)?;
 
+    let mut raw_size_buf = [0u8; 8];
+    stream.read_exact(&mut raw_size_buf)?;
+    let size_len = u64::from_be_bytes(raw_size_buf) as usize;
+    let mut raw_size = vec![0u8; size_len];
+    stream.read_exact(&mut raw_size)?;
+
     stream.read_exact(&mut len)?;
     let file_type_len = u16::from_be_bytes(len) as usize;
     let mut file_type = vec![0u8; file_type_len];
@@ -215,9 +225,13 @@ pub fn receive_metadata(stream: &mut TcpStream) -> Result<FileMetadata, Error> {
     let path = String::from_utf8(path)?;
     let modified_date = String::from_utf8(modified_date)?;
 
+    let try_u64: [u8; 8] = raw_size.try_into().expect("buffer size must be of 8 bytes");
+    let raw_bytes = u64::from_be_bytes(try_u64);
+
     Ok(FileMetadata {
         name: name,
         size: size,
+        raw_bytes: raw_bytes,
         file_type: file_type,
         path: path,
         modified_date: modified_date,
@@ -283,6 +297,7 @@ mod tests {
         let metadata = FileMetadata {
             name: "example.txt".into(),
             size: "123456".into(),
+            raw_bytes: 123456,
             file_type: "text/plain".into(),
             path: "/home/user/example.txt".into(),
             modified_date: "2026-01-10".into(),
@@ -308,6 +323,7 @@ mod tests {
         let metadata = FileMetadata {
             name: "".into(),
             size: "".into(),
+            raw_bytes: 0,
             file_type: "".into(),
             path: "".into(),
             modified_date: "".into(),

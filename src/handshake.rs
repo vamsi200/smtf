@@ -90,16 +90,11 @@ pub fn gen_human_readable_transfer_code(encoded_data: &str) -> String {
 }
 
 pub fn parse_transfer_code(transfer_code: &String) -> RawTransferCode {
-    if transfer_code.contains("-") {
-        transfer_code
-            .split_terminator('-')
-            .into_iter()
-            .collect::<Vec<_>>()
-            .concat()
-    } else {
-        eprintln!("Invalid Secret");
-        exit(1); // do something else..
-    }
+    transfer_code
+        .split_terminator('-')
+        .into_iter()
+        .collect::<Vec<_>>()
+        .concat()
 }
 
 // Sender
@@ -459,7 +454,6 @@ pub fn start_receiver(
                                         {
                                             ui_tx.send(ReceiverUiState::Receiving);
                                             let mut file = File::create(file_path).expect("error");
-                                            cmd_tx.send(ReceiverState::RecieveStarted);
 
                                             if let Ok(_) = receive_file(
                                                 &mut stream,
@@ -487,6 +481,8 @@ pub fn start_receiver(
                                 }
                             }
                         }
+                    } else {
+                        panic!("Did not receive any metadata");
                     }
                 }
             }
