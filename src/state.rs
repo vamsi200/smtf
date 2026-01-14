@@ -117,7 +117,96 @@ pub enum SenderEvent {
     PeerConnected(SocketAddr),
     TransferStarted,
     TransferCompleted,
-    Error(String),
+    Error(UiError),
+}
+
+#[derive(Debug, Clone)]
+pub enum UiError {
+    PublicKeySendFailed(Option<String>),
+    PublicKeyReceiveFailed(Option<String>),
+    SecretSendFailed(Option<String>),
+    SessionKeysFailed(Option<String>),
+    SecretVerificationFailed(Option<String>),
+    HandshakeFailed(Option<String>),
+    NonceSendFailed(Option<String>),
+    TransferFailed(Option<String>),
+    HashReceiveFailed(Option<String>),
+    DecisionSendFailed(Option<String>),
+    ConnectionLost(Option<String>),
+    NonceReceiveFailed(Option<String>),
+    ChunkLengthReceiveFailed(Option<String>),
+    ChunkReceiveFailed(Option<String>),
+    FileWriteFailed(Option<String>),
+    DecodeFailed(Option<String>),
+    ConnectionFailed,
+    MetadataSendFailed,
+    HashSendFailed,
+    DecisionReceiveFailed,
+    PermissionDenied,
+    TransferCancelled,
+    UnexpectedEof,
+
+    Unknown(String),
+}
+
+impl UiError {
+    pub fn title(&self) -> &'static str {
+        match self {
+            UiError::PublicKeySendFailed(_) => "Public key send failed",
+            UiError::PublicKeyReceiveFailed(_) => "Public key receive failed",
+            UiError::SecretSendFailed(_) => "Secret send failed",
+            UiError::SessionKeysFailed(_) => "Session key derivation failed",
+            UiError::SecretVerificationFailed(_) => "Secret verification failed",
+            UiError::HandshakeFailed(_) => "Handshake failed",
+
+            UiError::NonceSendFailed(_) => "Nonce send failed",
+            UiError::NonceReceiveFailed(_) => "Nonce receive failed",
+            UiError::ChunkLengthReceiveFailed(_) => "Failed to receive chunk length",
+            UiError::ChunkReceiveFailed(_) => "Failed to receive encrypted chunk",
+            UiError::TransferFailed(_) => "File transfer failed",
+            UiError::FileWriteFailed(_) => "Failed to write file",
+
+            UiError::HashReceiveFailed(_) => "Failed to receive hash",
+            UiError::HashSendFailed => "Failed to send hash",
+            UiError::DecisionSendFailed(_) => "Failed to send decision",
+            UiError::DecisionReceiveFailed => "Failed to receive decision",
+            UiError::MetadataSendFailed => "Failed to send metadata",
+
+            UiError::ConnectionLost(_) => "Connection lost",
+            UiError::ConnectionFailed => "Connection failed",
+            UiError::PermissionDenied => "Permission denied",
+            UiError::TransferCancelled => "Transfer cancelled",
+            UiError::UnexpectedEof => "Unexpected end of stream",
+            UiError::DecodeFailed(_) => "Code Decode Failed",
+
+            UiError::Unknown(_) => "Unknown error",
+        }
+    }
+
+    pub fn details(&self) -> Option<&str> {
+        match self {
+            UiError::PublicKeySendFailed(Some(msg))
+            | UiError::PublicKeyReceiveFailed(Some(msg))
+            | UiError::SecretSendFailed(Some(msg))
+            | UiError::SessionKeysFailed(Some(msg))
+            | UiError::SecretVerificationFailed(Some(msg))
+            | UiError::HandshakeFailed(Some(msg))
+            | UiError::NonceSendFailed(Some(msg))
+            | UiError::NonceReceiveFailed(Some(msg))
+            | UiError::TransferFailed(Some(msg))
+            | UiError::HashReceiveFailed(Some(msg))
+            | UiError::DecisionSendFailed(Some(msg))
+            | UiError::ConnectionLost(Some(msg))
+            | UiError::ChunkLengthReceiveFailed(Some(msg))
+            | UiError::ChunkReceiveFailed(Some(msg))
+            | UiError::FileWriteFailed(Some(msg)) => Some(msg),
+
+            UiError::DecodeFailed(Some(msg)) => Some(msg),
+            UiError::Unknown(msg) => Some(msg),
+
+            _ => None,
+        }
+    }
 }
 
 // maybe add cancel later
@@ -154,7 +243,7 @@ pub enum ReceiverState {
     FileState(FileMetadata),
     FileHash(FileHash),
     RecieveCompleted,
-    Error(String),
+    Error(UiError),
 }
 
 pub enum ReceiverUiState {

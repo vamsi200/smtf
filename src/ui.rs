@@ -16,7 +16,7 @@ use crate::{
     helper::get_socket_addr,
     state::{
         Command, FileHash, FileMetadata, HandshakeData, ReceiveHandShakeState, ReceiverUiState,
-        SenderEvent, SenderHandShakeState, TransferProgress,
+        SenderEvent, SenderHandShakeState, TransferProgress, UiError,
     },
     transfer::Outcome,
 };
@@ -32,6 +32,7 @@ pub struct AppState {
     pub ui_state: Option<ReceiverUiState>,
     pub transfer_progress: Option<TransferProgress>,
     pub received_handshake_state: Option<ReceiveHandShakeState>,
+    pub ui_error: Option<UiError>,
 }
 
 impl AppState {
@@ -132,6 +133,10 @@ impl AppState {
                                     SenderEvent::Trasnfer(tp) => self.transfer_progress = Some(tp),
                                     SenderEvent::TransferStarted => self.is_sending = true,
                                     SenderEvent::TransferCompleted => self.is_sent = true,
+                                    SenderEvent::Error(ui_err) => {
+                                        info!("Error from sender - {:?}", ui_err);
+                                        self.ui_error = Some(ui_err);
+                                    }
                                     _ => {}
                                 }
                             }
@@ -160,7 +165,8 @@ impl AppState {
                                 progress_bar(ui, &tp);
                             }
 
-                            completion_popup(ctx, ui, self.is_sent, &mut mode);
+                            completion_popup(ctx, ui, self.is_sent, &mut mode, true);
+                            error_popup(ctx, &mut self.ui_error, &mut mode);
                         });
                     }
 
@@ -209,9 +215,13 @@ impl AppState {
                                         self.transfer_progress = Some(tp);
                                     }
                                 }
+                                ReceiverState::Error(e) => {
+                                    self.ui_error = Some(e);
+                                }
                                 _ => {}
                             }
                         }
+
                         ui.vertical_centered(|ui| {
                             ui.add_space(30.0);
 
@@ -248,6 +258,7 @@ impl AppState {
                                             &self.file_hash,
                                             ctx,
                                             &cmd_tx,
+                                            &mut mode,
                                         );
                                     }
                                     ReceiverUiState::Receiving => {
@@ -279,18 +290,31 @@ impl AppState {
                                 Some(ReceiverState::RecieveCompleted)
                             ),
                             &mut mode,
+                            false,
                         );
+                        error_popup(ctx, &mut self.ui_error, &mut mode);
                     }
                 });
         })
     }
 }
 
-fn completion_popup(ctx: &Context, ui: &mut Ui, mut is_completed: bool, mode: &mut Mode) {
+fn completion_popup(
+    ctx: &Context,
+    ui: &mut Ui,
+    mut is_completed: bool,
+    mode: &mut Mode,
+    is_sending: bool,
+) {
     if !is_completed {
         return;
     }
 
+    let heading = if is_sending {
+        "File sent successfully"
+    } else {
+        "File received successfully"
+    };
     Window::new("Transfer Complete")
         .collapsible(false)
         .resizable(false)
@@ -298,7 +322,8 @@ fn completion_popup(ctx: &Context, ui: &mut Ui, mut is_completed: bool, mode: &m
         .show(ctx, |ui| {
             ui.vertical_centered(|ui| {
                 ui.add_space(12.0);
-                ui.heading("File received successfully");
+
+                ui.heading(heading);
             });
 
             ui.horizontal(|ui| {
@@ -688,6 +713,9 @@ fn cancel_transfer_popup(
                 });
 
                 ui.add_space(8.0);
+                if ctx.input(|x| x.key_pressed(Key::Escape)) {
+                    confirm.open = false;
+                }
             });
         });
 }
@@ -700,6 +728,7 @@ fn receive_file_popup(
     file_hash: &FileHash,
     ctx: &Context,
     cmd_tx: &Sender<Command>,
+    mode: &mut Mode,
 ) {
     let accent = Color32::from_rgb(180, 100, 255);
     ui.set_max_width(1000.0);
@@ -748,6 +777,7 @@ fn receive_file_popup(
                         }
                         if ui.button("Cancel").clicked() {
                             let _ = cmd_tx.send(Command::Decision(Decision::Reject));
+                            *mode = Mode::Idle;
                         }
                     });
                 });
@@ -933,6 +963,50 @@ fn receiver_card_single_box(
         });
         ui.add_space(12.0);
     });
+}
+
+fn error_popup(ctx: &egui::Context, error: &mut Option<UiError>, mode: &mut Mode) {
+    let Some(err) = error else { return };
+    let err = err.clone();
+    egui::Window::new("Error")
+        .collapsible(false)
+        .resizable(false)
+        .anchor(Align2::CENTER_CENTER, Vec2::ZERO)
+        .show(ctx, |ui| {
+            egui::Frame::popup(ui.style()).show(ui, |ui| {
+                ui.set_min_width(300.0);
+
+                ui.label(
+                    egui::RichText::new("Error")
+                        .size(16.0)
+                        .strong()
+                        .color(egui::Color32::RED),
+                );
+
+                ui.add_space(8.0);
+
+                ui.label(err.title());
+                if let Some(details) = err.details() {
+                    ui.add_space(4.0);
+                    ui.label(
+                        egui::RichText::new(details)
+                            .small()
+                            .color(egui::Color32::from_gray(160)),
+                    );
+                }
+
+                ui.add_space(12.0);
+
+                if ui.button("OK").clicked() {
+                    *error = None;
+                    match mode {
+                        Mode::Send => *mode = Mode::Send,
+                        Mode::Receive => *mode = Mode::Receive,
+                        _ => {}
+                    }
+                }
+            });
+        });
 }
 
 fn feature_pill(ui: &mut egui::Ui, icon: &str, text: &str) {

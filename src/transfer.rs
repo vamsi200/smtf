@@ -1,4 +1,5 @@
 #![allow(unused)]
+use crate::handshake::FatalExt;
 use anyhow::{Error, Result};
 use blake3::Hash;
 use log::info;
@@ -17,13 +18,27 @@ use crate::{
     crypto::{decrypt_data, encrypt_data},
     handshake::{receive_nonce, send_nonce},
     helper::PREHASH_LIMIT,
-    state::{FileMetadata, ReceiverState, SenderEvent, TransferProgress},
+    state::{FileMetadata, ReceiverState, SenderEvent, TransferProgress, UiError},
 };
 
 // to handle the Eof problem
 enum MsgType {
     Data = 1,
     Eof = 2,
+}
+
+fn fatal_io<T>(
+    res: std::io::Result<T>,
+    ev_tx: &Sender<SenderEvent>,
+    err: impl FnOnce(String) -> UiError,
+) -> Option<T> {
+    match res {
+        Ok(v) => Some(v),
+        Err(e) => {
+            ev_tx.send(SenderEvent::Error(err(e.to_string())));
+            None
+        }
+    }
 }
 
 pub fn send_file(
@@ -36,12 +51,13 @@ pub fn send_file(
 ) -> (Hash, Outcome) {
     let mut buf = [0u8; 512 * 1024];
     let mut hasher = blake3::Hasher::new();
-    file.seek(SeekFrom::Start(0)).expect("Failed to Seek");
+
+    file.seek(SeekFrom::Start(0)).expect("Failed to seek");
     let file_size = file.metadata().unwrap().len();
-    let mut delta = 0;
+
+    let mut delta = 0usize;
     let mut result = Outcome::Completed;
 
-    // all this just to not check the hasher on every iteration
     if hash.is_none() {
         while let Ok(n) = file.read(&mut buf) {
             if cancel.load(Ordering::Relaxed) {
@@ -50,80 +66,129 @@ pub fn send_file(
             }
 
             if n == 0 {
-                let eof_msg = MsgType::Eof as u8;
-                stream.write_all(&[eof_msg]);
-                info!("Reached EOF, breaking...");
+                if stream
+                    .write_all(&[MsgType::Eof as u8])
+                    .fatal(&ev_tx, |m| UiError::TransferFailed(m))
+                    .is_none()
+                {
+                    break;
+                }
                 break;
             }
 
-            hasher.update(&mut buf[..n]);
-            let plain_text_len = n as u32;
-            delta += plain_text_len as usize;
+            hasher.update(&buf[..n]);
+            delta += n;
 
-            let transfer_progress = TransferProgress {
+            ev_tx.send(SenderEvent::Trasnfer(TransferProgress {
                 total: file_size,
                 sent: delta,
-            };
+            }));
 
-            ev_tx.send(SenderEvent::Trasnfer(transfer_progress));
             let (encrypted_chunks, nonce) = encrypt_data(sender_key, &buf[..n]);
 
-            let data_start = MsgType::Data as u8;
-            stream.write_all(&[data_start]);
-            send_nonce(stream, nonce).expect("Failed to send nonce");
+            if stream
+                .write_all(&[MsgType::Data as u8])
+                .fatal(&ev_tx, |m| UiError::TransferFailed(m))
+                .is_none()
+            {
+                break;
+            }
 
-            let encrypted_chunks_len = encrypted_chunks.len() as u32;
-            stream.write_all(&encrypted_chunks_len.to_be_bytes());
-            stream
+            if send_nonce(stream, nonce)
+                .fatal(&ev_tx, |m| UiError::NonceSendFailed(m))
+                .is_none()
+            {
+                break;
+            }
+
+            let len = encrypted_chunks.len() as u32;
+            if stream
+                .write_all(&len.to_be_bytes())
+                .fatal(&ev_tx, |m| UiError::TransferFailed(m))
+                .is_none()
+            {
+                break;
+            }
+
+            if stream
                 .write_all(&encrypted_chunks)
-                .inspect_err(|e| eprintln!("{e}"))
-                .unwrap();
+                .fatal(&ev_tx, |m| UiError::TransferFailed(m))
+                .is_none()
+            {
+                break;
+            }
         }
     } else {
         loop {
-            let n = file.read(&mut buf).expect("failed to read file");
+            let n = match file
+                .read(&mut buf)
+                .fatal(&ev_tx, |m| UiError::TransferFailed(m))
+            {
+                Some(n) => n,
+                None => break,
+            };
+
             if cancel.load(Ordering::Relaxed) {
                 result = Outcome::Cancelled;
                 break;
             }
 
             if n == 0 {
-                let eof_msg = MsgType::Eof as u8;
-                stream.write_all(&[eof_msg]);
-                info!("Reached EOF, breaking...");
+                if stream
+                    .write_all(&[MsgType::Eof as u8])
+                    .fatal(&ev_tx, |m| UiError::TransferFailed(m))
+                    .is_none()
+                {
+                    break;
+                }
                 break;
             }
 
-            let plain_text_len = n as u32;
-            let (encrypted_chunks, nonce) = encrypt_data(sender_key, &buf[..n]);
-            delta += plain_text_len as usize;
+            delta += n;
 
-            let transfer_progress = TransferProgress {
+            ev_tx.send(SenderEvent::Trasnfer(TransferProgress {
                 total: file_size,
                 sent: delta,
-            };
-            ev_tx.send(SenderEvent::Trasnfer(transfer_progress));
+            }));
 
-            let data_start = MsgType::Data as u8;
-            stream.write_all(&[data_start]);
-            send_nonce(stream, nonce).expect("Failed to send nonce");
+            let (encrypted_chunks, nonce) = encrypt_data(sender_key, &buf[..n]);
 
-            let encrypted_chunks_len = encrypted_chunks.len() as u32;
-            stream.write_all(&encrypted_chunks_len.to_be_bytes());
-            stream
+            if stream
+                .write_all(&[MsgType::Data as u8])
+                .fatal(&ev_tx, |m| UiError::TransferFailed(m))
+                .is_none()
+            {
+                break;
+            }
+
+            if send_nonce(stream, nonce)
+                .fatal(&ev_tx, |m| UiError::NonceSendFailed(m))
+                .is_none()
+            {
+                break;
+            }
+
+            let len = encrypted_chunks.len() as u32;
+            if stream
+                .write_all(&len.to_be_bytes())
+                .fatal(&ev_tx, |m| UiError::TransferFailed(m))
+                .is_none()
+            {
+                break;
+            }
+
+            if stream
                 .write_all(&encrypted_chunks)
-                .inspect_err(|e| eprintln!("{e}"))
-                .unwrap();
+                .fatal(&ev_tx, |m| UiError::TransferFailed(m))
+                .is_none()
+            {
+                break;
+            }
         }
     }
 
-    let hash = if let Some(hash) = hash {
-        hash
-    } else {
-        hasher.finalize()
-    };
-
-    (hash, result)
+    let final_hash = hash.unwrap_or_else(|| hasher.finalize());
+    (final_hash, result)
 }
 
 pub enum Outcome {
@@ -144,29 +209,44 @@ pub fn receive_file(
 
     loop {
         let mut msg = [0u8; 1];
-        if stream.read_exact(&mut msg).is_err() {
+
+        if stream
+            .read_exact(&mut msg)
+            .fatal(ev_tx, UiError::ConnectionLost)
+            .is_none()
+        {
             result = Outcome::Error;
             break;
         }
 
         if cancel.load(Ordering::Relaxed) {
-            stream.shutdown(std::net::Shutdown::Read); // this causes connection reset.. do
-                                                       // something else
-            info!("Shutting down receiver..");
             result = Outcome::Cancelled;
+            let _ = stream.shutdown(std::net::Shutdown::Both);
             break;
         }
 
         match msg[0] {
-            2 => {
-                break;
-            }
-            1 => {
-                let nonce = receive_nonce(stream).inspect_err(|e| eprintln!("{e}"))?;
-                let mut encrypted_chunk_len = [0u8; 4];
-                let mut plain_text_len = [0u8; 4];
+            2 => break,
 
-                stream.read_exact(&mut encrypted_chunk_len)?;
+            1 => {
+                let nonce = match receive_nonce(stream).fatal(ev_tx, UiError::NonceReceiveFailed) {
+                    Some(n) => n,
+                    None => {
+                        result = Outcome::Error;
+                        break;
+                    }
+                };
+
+                let mut encrypted_chunk_len = [0u8; 4];
+
+                if stream
+                    .read_exact(&mut encrypted_chunk_len)
+                    .fatal(ev_tx, UiError::ChunkLengthReceiveFailed)
+                    .is_none()
+                {
+                    result = Outcome::Error;
+                    break;
+                }
 
                 let encrypted_buf_len = u32::from_be_bytes(encrypted_chunk_len) as usize;
 
@@ -175,18 +255,35 @@ pub fn receive_file(
                 }
 
                 let mut buf = vec![0u8; encrypted_buf_len];
-                stream.read_exact(&mut buf)?;
+
+                if stream
+                    .read_exact(&mut buf)
+                    .fatal(ev_tx, UiError::ChunkReceiveFailed)
+                    .is_none()
+                {
+                    result = Outcome::Error;
+                    break;
+                }
 
                 let decrypted = decrypt_data(buf, nonce, receiver_key);
-                delta += decrypted.len() as usize;
+                delta += decrypted.len();
 
                 ev_tx.send(ReceiverState::ReceivedBytes(delta));
 
-                file.write_all(&decrypted)?;
+                if file
+                    .write_all(&decrypted)
+                    .fatal(ev_tx, UiError::FileWriteFailed)
+                    .is_none()
+                {
+                    result = Outcome::Error;
+                    break;
+                }
             }
+
             _ => {}
         }
     }
+
     Ok(result)
 }
 

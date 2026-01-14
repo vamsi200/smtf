@@ -12,7 +12,7 @@ use smtf::{
     helper::{self, get_file_size, get_socket_addr},
     state::{
         self, BackendState, Command, FileHash, FileMetadata, HandshakeData, ReceiverState,
-        ReceiverUiState, SenderEvent,
+        ReceiverUiState, SenderEvent, UiError,
     },
     transfer::send_file,
     ui::{self, AppState},
@@ -54,6 +54,7 @@ fn main() -> Result<(), Error> {
         ui_state: None,
         transfer_progress: None,
         received_handshake_state: None,
+        ui_error: None,
     };
 
     std::thread::spawn(move || {
@@ -89,15 +90,20 @@ pub fn entry_point(
                     state = BackendState::Sending(new_task);
                 }
                 Command::StartReciver { code } => {
-                    if let BackendState::Sending(task) = state {
-                        task.cancel.store(true, Ordering::Relaxed);
-                        task.handle
-                            .join()
-                            .expect("Failed to complete the reciever task");
-                    }
-                    let transfer_code = decode(&code)?;
-                    let new_task = receiver(transfer_code, rec_tx.clone(), ui_tx.clone())?;
-                    state = BackendState::Receving(new_task);
+                    match decode(&code) {
+                        Some(tc) => {
+                            let new_task = receiver(tc, rec_tx.clone(), ui_tx.clone())?;
+                            state = BackendState::Receving(new_task);
+                        }
+                        None => {
+                            rec_tx.send(ReceiverState::Error(
+                                UiError::SecretVerificationFailed(Some(
+                                    "Invalid Secret!".to_string(),
+                                )),
+                            ))?;
+                            continue;
+                        }
+                    };
                 }
                 Command::Decision(decision) => {
                     if let BackendState::Receving(task) = &state {
