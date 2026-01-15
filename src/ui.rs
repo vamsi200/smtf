@@ -1,7 +1,7 @@
 #![allow(unused)]
 use arboard::Clipboard;
 use blake3::Hash;
-use eframe::NativeOptions;
+use eframe::{NativeOptions, Renderer};
 use egui::{epaint::FontsView, *};
 use log::info;
 use rfd::FileDialog;
@@ -47,6 +47,7 @@ impl AppState {
             viewport: egui::ViewportBuilder::default()
                 .with_inner_size([1280.0, 800.0])
                 .with_min_inner_size([900.0, 600.0]),
+            renderer: Renderer::Wgpu,
             ..Default::default()
         };
 
