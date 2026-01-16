@@ -7,7 +7,10 @@ use log::info;
 use rfd::FileDialog;
 use std::{
     net::TcpListener,
-    sync::mpsc::{Receiver, Sender},
+    sync::{
+        mpsc::{Receiver, Sender},
+        Arc, Condvar, Mutex,
+    },
     time::Instant,
 };
 
@@ -42,6 +45,7 @@ impl AppState {
         cmd_tx: Sender<Command>,
         rec_rx: Receiver<ReceiverState>,
         ui_rx: Receiver<ReceiverUiState>,
+        cond_var: Arc<(Mutex<bool>, Condvar)>,
     ) -> eframe::Result<()> {
         let options = NativeOptions {
             viewport: egui::ViewportBuilder::default()
@@ -107,7 +111,6 @@ impl AppState {
                             &cmd_tx,
                         );
 
-                        // should I keep this pattern?
                         if b {
                             cancel_confirm.open = true;
                         }
@@ -142,7 +145,6 @@ impl AppState {
                                 }
                             }
 
-                            // This is a stupid pattern bro
                             if let (Some(handshake_state), Some(hd)) =
                                 (&self.handshake_state, &self.handshake_data)
                             {
@@ -163,7 +165,7 @@ impl AppState {
                             }
 
                             if let Some(tp) = &self.transfer_progress {
-                                progress_bar(ui, &tp);
+                                progress_bar(ui, &tp, &cmd_tx, cond_var.clone());
                             }
 
                             completion_popup(ctx, ui, self.is_sent, &mut mode, true);
@@ -275,7 +277,7 @@ impl AppState {
                                         ui.add_space(10.0);
 
                                         if let Some(tp) = &self.transfer_progress {
-                                            progress_bar(ui, &tp);
+                                            progress_bar(ui, &tp, &cmd_tx, cond_var.clone());
                                         }
                                     }
                                     _ => {}
@@ -637,13 +639,38 @@ fn sender_card_single_box(ui: &mut Ui, data: &FileMetadata, file_hash: &FileHash
     ui.add_space(12.0);
 }
 
-fn progress_bar(ui: &mut Ui, progress: &TransferProgress) {
-    ui.add(egui::ProgressBar::new(progress.fraction()).text(format!(
-        "{:.1}% ({}/{})",
-        progress.percent(),
-        progress.sent,
-        progress.total
-    )));
+fn progress_bar(
+    ui: &mut Ui,
+    progress: &TransferProgress,
+    cmd_tx: &Sender<Command>,
+    condvar: Arc<(Mutex<bool>, Condvar)>,
+) {
+    ui.horizontal(|ui| {
+        ui.add_sized(
+            [300.0, 20.0],
+            egui::ProgressBar::new(progress.fraction()).text(format!(
+                "{:.1}% ({}/{})",
+                progress.percent(),
+                progress.sent,
+                progress.total
+            )),
+        );
+
+        if ui.button("⏸ Pause").clicked() {
+            let _ = cmd_tx.send(Command::Pause);
+            let (lock, condvar) = &*condvar;
+            let mut paused = lock.lock().unwrap();
+            *paused = false;
+            condvar.notify_all();
+        }
+
+        if ui.button("Resume").clicked() {
+            let (lock, condvar) = &*condvar;
+            let mut paused = lock.lock().unwrap();
+            *paused = true;
+            condvar.notify_all();
+        }
+    });
 }
 
 #[derive(Default, Clone)]

@@ -4,7 +4,7 @@
 use anyhow::{Error, Result};
 use chacha20poly1305::Nonce;
 use egui::text_selection::LabelSelectionState;
-use egui::Ui;
+use egui::{Order, Ui};
 use log::{error, info, log};
 use rand::RngCore;
 use rand::{rngs::OsRng, TryRngCore};
@@ -24,7 +24,7 @@ use std::process::exit;
 use std::str::FromStr;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Condvar, Mutex};
 use std::thread::sleep;
 use std::time::Duration;
 use x25519_dalek::{EphemeralSecret, PublicKey, SharedSecret};
@@ -200,16 +200,21 @@ macro_rules! fatal_or_return {
 }
 
 // Sender
-pub fn sender(ev_tx: mpsc::Sender<SenderEvent>, file_path: PathBuf) -> Result<Task, Error> {
+pub fn sender(
+    ev_tx: mpsc::Sender<SenderEvent>,
+    file_path: PathBuf,
+    pause_cond: Arc<(Mutex<bool>, Condvar)>,
+) -> Result<Task, Error> {
     let cancel = Arc::new(AtomicBool::new(false));
     let cancel_clone = cancel.clone();
+
+    let pause = Arc::new(AtomicBool::new(false));
+    let pause_clone = Arc::clone(&pause);
 
     let cwd = std::env::current_dir()?;
     let socket_addr = get_socket_addr()?;
     let secret_code = encode(socket_addr)?;
-    let transfer_code = decode(&secret_code).unwrap(); // unwrap is
-                                                       // fine here I
-                                                       // guess..
+    let transfer_code = decode(&secret_code).unwrap(); // unwrap is fine here I guess..
 
     ev_tx.send(SenderEvent::HandshakeState(
         SenderHandShakeState::Initialized,
@@ -355,14 +360,18 @@ pub fn sender(ev_tx: mpsc::Sender<SenderEvent>, file_path: PathBuf) -> Result<Ta
                                 hash.clone(),
                                 ev_tx.clone(),
                                 &cancel_clone,
+                                pause_cond,
+                                &pause_clone,
                             );
-                            ev_tx.send(SenderEvent::TransferCompleted);
 
-                            if matches!(outcome, Outcome::Completed) && hash.is_none() {
-                                let _ = send_hash(Some(final_hash.clone()), &mut stream);
-                                ev_tx.send(SenderEvent::FileHash(FileHash {
-                                    hash: Some(final_hash),
-                                }));
+                            if matches!(outcome, Outcome::Completed) {
+                                ev_tx.send(SenderEvent::TransferCompleted);
+                                if hash.is_none() {
+                                    let _ = send_hash(Some(final_hash.clone()), &mut stream);
+                                    ev_tx.send(SenderEvent::FileHash(FileHash {
+                                        hash: Some(final_hash),
+                                    }));
+                                }
                             }
                         }
 
@@ -390,7 +399,11 @@ pub fn sender(ev_tx: mpsc::Sender<SenderEvent>, file_path: PathBuf) -> Result<Ta
         info!("Sender thread exiting cleanly");
     });
 
-    Ok(Task { cancel, handle })
+    Ok(Task {
+        cancel,
+        handle,
+        pause,
+    })
 }
 
 const NONCE_LEN: usize = 12;
@@ -468,6 +481,8 @@ pub fn start_receiver(
     decision_rx: Receiver<Decision>,
     ui_tx: Sender<ReceiverUiState>,
     cancel: Arc<AtomicBool>,
+    pause: Arc<AtomicBool>,
+    pause_cond: Arc<(Mutex<bool>, Condvar)>,
 ) {
     let socket_addr = transfer_code.socket_addr;
     let secret = transfer_code.secret;
@@ -603,6 +618,8 @@ pub fn start_receiver(
                     &mut file,
                     &cmd_tx,
                     &cancel,
+                    &pause,
+                    pause_cond.clone(),
                 ) {
                     if let Outcome::Completed = outcome {
                         cmd_tx.send(ReceiverState::RecieveCompleted);
@@ -649,18 +666,31 @@ pub fn receiver(
     transfer_code: TransferCode,
     rec_tx: Sender<ReceiverState>,
     ui_tx: Sender<ReceiverUiState>,
+    pause_cond: Arc<(Mutex<bool>, Condvar)>,
 ) -> Result<ReceiverTask, Error> {
     let (decision_tx, decision_rx) = std::sync::mpsc::channel();
+    let pause = Arc::new(AtomicBool::new(false));
+    let pause_clone = Arc::clone(&pause);
+
     let mut cancel = Arc::new(AtomicBool::new(false));
     let cancel_clone = cancel.clone();
     let handle = std::thread::spawn(move || {
-        start_receiver(transfer_code, rec_tx, decision_rx, ui_tx, cancel_clone)
+        start_receiver(
+            transfer_code,
+            rec_tx,
+            decision_rx,
+            ui_tx,
+            cancel_clone,
+            pause_clone,
+            pause_cond,
+        )
     });
 
     Ok(ReceiverTask {
         handle: handle,
         decision_tx: decision_tx,
         cancel: cancel,
+        pause: pause,
     })
 }
 

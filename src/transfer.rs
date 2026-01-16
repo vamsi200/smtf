@@ -21,24 +21,11 @@ use crate::{
     state::{FileMetadata, ReceiverState, SenderEvent, TransferProgress, UiError},
 };
 
-// to handle the Eof problem
+use std::sync::Condvar;
+
 enum MsgType {
     Data = 1,
     Eof = 2,
-}
-
-fn fatal_io<T>(
-    res: std::io::Result<T>,
-    ev_tx: &Sender<SenderEvent>,
-    err: impl FnOnce(String) -> UiError,
-) -> Option<T> {
-    match res {
-        Ok(v) => Some(v),
-        Err(e) => {
-            ev_tx.send(SenderEvent::Error(err(e.to_string())));
-            None
-        }
-    }
 }
 
 pub fn send_file(
@@ -48,8 +35,10 @@ pub fn send_file(
     hash: Option<Hash>,
     ev_tx: Sender<SenderEvent>,
     cancel: &Arc<AtomicBool>,
+    pause: Arc<(Mutex<bool>, Condvar)>,
+    is_pause: &Arc<AtomicBool>,
 ) -> (Hash, Outcome) {
-    let mut buf = [0u8; 512 * 1024];
+    let mut buf = [0u8; 64];
     let mut hasher = blake3::Hasher::new();
 
     file.seek(SeekFrom::Start(0)).expect("Failed to seek");
@@ -63,6 +52,15 @@ pub fn send_file(
             if cancel.load(Ordering::Relaxed) {
                 result = Outcome::Cancelled;
                 break;
+            }
+
+            if is_pause.load(Ordering::Relaxed) {
+                let (lock, condvar) = &*pause;
+
+                let mut paused = lock.lock().unwrap();
+                while !*paused {
+                    paused = condvar.wait(paused).unwrap();
+                }
             }
 
             if n == 0 {
@@ -131,6 +129,15 @@ pub fn send_file(
             if cancel.load(Ordering::Relaxed) {
                 result = Outcome::Cancelled;
                 break;
+            }
+
+            if is_pause.load(Ordering::Relaxed) {
+                let (lock, condvar) = &*pause;
+
+                let mut paused = lock.lock().unwrap();
+                while !*paused {
+                    paused = condvar.wait(paused).unwrap();
+                }
             }
 
             if n == 0 {
@@ -203,6 +210,8 @@ pub fn receive_file(
     file: &mut File,
     ev_tx: &Sender<ReceiverState>,
     cancel: &Arc<AtomicBool>,
+    is_pause: &Arc<AtomicBool>,
+    pause: Arc<(Mutex<bool>, Condvar)>,
 ) -> Result<Outcome, Error> {
     let mut delta: usize = 0;
     let mut result = Outcome::Completed;
@@ -217,6 +226,15 @@ pub fn receive_file(
         {
             result = Outcome::Error;
             break;
+        }
+
+        if is_pause.load(Ordering::Relaxed) {
+            let (lock, condvar) = &*pause;
+
+            let mut paused = lock.lock().unwrap();
+            while !*paused {
+                paused = condvar.wait(paused).unwrap();
+            }
         }
 
         if cancel.load(Ordering::Relaxed) {

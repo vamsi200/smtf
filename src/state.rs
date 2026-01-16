@@ -3,7 +3,7 @@
 use std::{
     net::SocketAddr,
     path::PathBuf,
-    sync::{atomic::AtomicBool, mpsc, Arc},
+    sync::{atomic::AtomicBool, mpsc, Arc, Condvar, Mutex},
     thread::JoinHandle,
 };
 
@@ -64,6 +64,7 @@ pub struct HandshakeData {
 pub struct Task {
     pub cancel: Arc<AtomicBool>,
     pub handle: JoinHandle<()>,
+    pub pause: Arc<AtomicBool>,
 }
 
 pub enum BackendState {
@@ -76,6 +77,7 @@ pub struct ReceiverTask {
     pub handle: JoinHandle<()>,
     pub cancel: Arc<AtomicBool>,
     pub decision_tx: std::sync::mpsc::Sender<Decision>,
+    pub pause: Arc<AtomicBool>,
 }
 
 pub enum Command {
@@ -84,6 +86,7 @@ pub enum Command {
     Cancel,
     Close,
     Decision(Decision),
+    Pause,
 }
 
 #[derive(Debug, PartialEq, PartialOrd)]

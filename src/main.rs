@@ -31,10 +31,12 @@ use std::{
         Arc, Mutex,
     },
 };
+use std::{
+    sync::Condvar,
+    time::{Duration, Instant},
+};
 use x25519_dalek::PublicKey;
 use zeroize::Zeroize;
-
-use std::time::{Duration, Instant};
 
 fn main() -> Result<(), Error> {
     env_logger::init();
@@ -42,6 +44,9 @@ fn main() -> Result<(), Error> {
     let (cmd_tx, cmd_rx) = mpsc::channel::<Command>();
     let (rec_tx, rec_rx) = mpsc::channel::<ReceiverState>();
     let (ui_tx, ui_rx) = mpsc::channel::<ReceiverUiState>();
+
+    let cond_var = Arc::new((Mutex::new(false), Condvar::new()));
+    let cond_var_clone = Arc::clone(&cond_var);
 
     let app_state = AppState {
         handshake_state: None,
@@ -58,10 +63,12 @@ fn main() -> Result<(), Error> {
     };
 
     std::thread::spawn(move || {
-        entry_point(ev_tx, cmd_rx, rec_tx, ui_tx).expect("entry is closed unexpectedly");
+        entry_point(ev_tx, cmd_rx, rec_tx, ui_tx, cond_var_clone)
+            .expect("entry is closed unexpectedly");
     });
 
-    ui::AppState::app(app_state, ev_rx, cmd_tx, rec_rx, ui_rx).expect("Failed to start gui");
+    ui::AppState::app(app_state, ev_rx, cmd_tx, rec_rx, ui_rx, cond_var)
+        .expect("Failed to start gui");
 
     // transfer_code.secret.zeroize();
     Ok(())
@@ -72,6 +79,7 @@ pub fn entry_point(
     cmd_rx: mpsc::Receiver<Command>,
     rec_tx: mpsc::Sender<ReceiverState>,
     ui_tx: mpsc::Sender<ReceiverUiState>,
+    cond_var: Arc<(Mutex<bool>, Condvar)>,
 ) -> Result<(), Error> {
     let mut state = BackendState::Idle;
 
@@ -85,14 +93,16 @@ pub fn entry_point(
                             .join()
                             .expect("failed to complete the sender task");
                     }
-                    let new_task =
-                        sender(ev_tx.clone(), file_path).expect("Failed to get sender task");
+                    let new_task = sender(ev_tx.clone(), file_path, cond_var.clone())
+                        .expect("Failed to get sender task");
                     state = BackendState::Sending(new_task);
                 }
+
                 Command::StartReciver { code } => {
                     match decode(&code) {
                         Some(tc) => {
-                            let new_task = receiver(tc, rec_tx.clone(), ui_tx.clone())?;
+                            let new_task =
+                                receiver(tc, rec_tx.clone(), ui_tx.clone(), cond_var.clone())?;
                             state = BackendState::Receving(new_task);
                         }
                         None => {
@@ -105,11 +115,13 @@ pub fn entry_point(
                         }
                     };
                 }
+
                 Command::Decision(decision) => {
                     if let BackendState::Receving(task) = &state {
                         let _ = task.decision_tx.send(decision);
                     }
                 }
+
                 Command::Cancel => {
                     if let BackendState::Sending(task) = state {
                         task.cancel.store(true, Ordering::Relaxed);
@@ -124,6 +136,22 @@ pub fn entry_point(
                         info!("Called cancel on receiver");
                     }
                 }
+
+                Command::Pause => {
+                    if let BackendState::Sending(task) = state {
+                        task.pause.store(true, Ordering::Relaxed);
+                        let _ = task.handle.join();
+                        state = BackendState::Idle;
+                        info!("Called pause on sender");
+                    }
+                    if let BackendState::Receving(task) = state {
+                        task.pause.store(true, Ordering::Relaxed);
+                        let _ = task.handle.join();
+                        state = BackendState::Idle;
+                        info!("Called pause on receiver");
+                    }
+                }
+
                 _ => {}
             },
             Err(err) => {
