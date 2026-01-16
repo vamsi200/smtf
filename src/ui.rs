@@ -165,7 +165,7 @@ impl AppState {
                             }
 
                             if let Some(tp) = &self.transfer_progress {
-                                progress_bar(ui, &tp, &cmd_tx, cond_var.clone());
+                                progress_bar(ui, &tp, &cmd_tx, &cond_var);
                             }
 
                             completion_popup(ctx, ui, self.is_sent, &mut mode, true);
@@ -277,7 +277,7 @@ impl AppState {
                                         ui.add_space(10.0);
 
                                         if let Some(tp) = &self.transfer_progress {
-                                            progress_bar(ui, &tp, &cmd_tx, cond_var.clone());
+                                            progress_bar(ui, &tp, &cmd_tx, &cond_var);
                                         }
                                     }
                                     _ => {}
@@ -643,7 +643,7 @@ fn progress_bar(
     ui: &mut Ui,
     progress: &TransferProgress,
     cmd_tx: &Sender<Command>,
-    condvar: Arc<(Mutex<bool>, Condvar)>,
+    condvar: &Arc<(Mutex<bool>, Condvar)>,
 ) {
     ui.horizontal(|ui| {
         ui.add_sized(
@@ -658,16 +658,15 @@ fn progress_bar(
 
         if ui.button("⏸ Pause").clicked() {
             let _ = cmd_tx.send(Command::Pause);
-            let (lock, condvar) = &*condvar;
-            let mut paused = lock.lock().unwrap();
-            *paused = false;
-            condvar.notify_all();
-        }
-
-        if ui.button("Resume").clicked() {
-            let (lock, condvar) = &*condvar;
+            let (lock, condvar) = &**condvar;
             let mut paused = lock.lock().unwrap();
             *paused = true;
+        }
+
+        if ui.button("▶ Resume").clicked() {
+            let (lock, condvar) = &**condvar;
+            let mut paused = lock.lock().unwrap();
+            *paused = false;
             condvar.notify_all();
         }
     });

@@ -38,7 +38,7 @@ pub fn send_file(
     pause: Arc<(Mutex<bool>, Condvar)>,
     is_pause: &Arc<AtomicBool>,
 ) -> (Hash, Outcome) {
-    let mut buf = [0u8; 64];
+    let mut buf = [0u8; 512 * 1024];
     let mut hasher = blake3::Hasher::new();
 
     file.seek(SeekFrom::Start(0)).expect("Failed to seek");
@@ -69,6 +69,8 @@ pub fn send_file(
                     .fatal(&ev_tx, |m| UiError::TransferFailed(m))
                     .is_none()
                 {
+                    result = Outcome::Error;
+
                     break;
                 }
                 break;
@@ -89,6 +91,8 @@ pub fn send_file(
                 .fatal(&ev_tx, |m| UiError::TransferFailed(m))
                 .is_none()
             {
+                result = Outcome::Error;
+
                 break;
             }
 
@@ -96,6 +100,8 @@ pub fn send_file(
                 .fatal(&ev_tx, |m| UiError::NonceSendFailed(m))
                 .is_none()
             {
+                result = Outcome::Error;
+
                 break;
             }
 
@@ -105,6 +111,8 @@ pub fn send_file(
                 .fatal(&ev_tx, |m| UiError::TransferFailed(m))
                 .is_none()
             {
+                result = Outcome::Error;
+
                 break;
             }
 
@@ -113,6 +121,8 @@ pub fn send_file(
                 .fatal(&ev_tx, |m| UiError::TransferFailed(m))
                 .is_none()
             {
+                result = Outcome::Error;
+
                 break;
             }
         }
@@ -135,7 +145,7 @@ pub fn send_file(
                 let (lock, condvar) = &*pause;
 
                 let mut paused = lock.lock().unwrap();
-                while !*paused {
+                while *paused {
                     paused = condvar.wait(paused).unwrap();
                 }
             }
@@ -146,6 +156,7 @@ pub fn send_file(
                     .fatal(&ev_tx, |m| UiError::TransferFailed(m))
                     .is_none()
                 {
+                    result = Outcome::Error;
                     break;
                 }
                 break;
@@ -165,6 +176,8 @@ pub fn send_file(
                 .fatal(&ev_tx, |m| UiError::TransferFailed(m))
                 .is_none()
             {
+                result = Outcome::Error;
+
                 break;
             }
 
@@ -172,6 +185,8 @@ pub fn send_file(
                 .fatal(&ev_tx, |m| UiError::NonceSendFailed(m))
                 .is_none()
             {
+                result = Outcome::Error;
+
                 break;
             }
 
@@ -181,6 +196,8 @@ pub fn send_file(
                 .fatal(&ev_tx, |m| UiError::TransferFailed(m))
                 .is_none()
             {
+                result = Outcome::Error;
+
                 break;
             }
 
@@ -189,6 +206,8 @@ pub fn send_file(
                 .fatal(&ev_tx, |m| UiError::TransferFailed(m))
                 .is_none()
             {
+                result = Outcome::Error;
+
                 break;
             }
         }
@@ -232,7 +251,7 @@ pub fn receive_file(
             let (lock, condvar) = &*pause;
 
             let mut paused = lock.lock().unwrap();
-            while !*paused {
+            while *paused {
                 paused = condvar.wait(paused).unwrap();
             }
         }
