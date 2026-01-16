@@ -143,8 +143,8 @@ type Connection = (TcpStream, SocketAddr);
 use crate::helper::{get_file_hash, get_file_metadata, get_socket_addr, PREHASH_LIMIT};
 use crate::state::{
     self, BackendState, Command, FileHash, FileMetadata, HandshakeData, ReceiveHandShakeState,
-    ReceiverState, ReceiverTask, ReceiverUiState, SenderEvent, SenderHandShakeState, Task,
-    TransferProgress, UiError,
+    ReceiverNetworkInfo, ReceiverState, ReceiverTask, ReceiverUiState, SenderEvent,
+    SenderHandShakeState, SenderNetworkInfo, Task, TransferProgress, UiError,
 };
 use crate::transfer::{
     self, receive_file, receive_hash, receive_metadata, send_file, send_file_metadata, send_hash,
@@ -216,6 +216,13 @@ pub fn sender(
     let secret_code = encode(socket_addr)?;
     let transfer_code = decode(&secret_code).unwrap(); // unwrap is fine here I guess..
 
+    let sender_network_info = SenderNetworkInfo {
+        ip: socket_addr.ip().to_string(),
+        port: socket_addr.port().to_string(),
+    };
+
+    ev_tx.send(SenderEvent::SenderNetworkInfo(sender_network_info));
+
     ev_tx.send(SenderEvent::HandshakeState(
         SenderHandShakeState::Initialized,
     ));
@@ -262,7 +269,12 @@ pub fn sender(
 
             match listener.accept() {
                 Ok((mut stream, addr)) => {
-                    info!("Client connected: {addr}");
+                    let receiver_network_info = ReceiverNetworkInfo {
+                        ip: addr.ip().to_string(),
+                        port: addr.port().to_string(),
+                    };
+
+                    ev_tx.send(SenderEvent::ReceiverNetworkInfo(receiver_network_info));
 
                     ev_tx.send(SenderEvent::HandshakeState(
                         SenderHandShakeState::VerifyingSecret,

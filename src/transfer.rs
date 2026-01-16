@@ -38,7 +38,7 @@ pub fn send_file(
     pause: Arc<(Mutex<bool>, Condvar)>,
     is_pause: &Arc<AtomicBool>,
 ) -> (Hash, Outcome) {
-    let mut buf = [0u8; 512 * 1024];
+    let mut buf = [0u8; 64];
     let mut hasher = blake3::Hasher::new();
 
     file.seek(SeekFrom::Start(0)).expect("Failed to seek");
@@ -546,7 +546,6 @@ mod tests {
         let (mut sender, mut receiver) = localhost_pair();
 
         let sender_thread = thread::spawn(move || {
-            // write an invalid flag
             sender.write_all(&[0xFF]).unwrap();
         });
 

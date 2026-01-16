@@ -110,7 +110,6 @@ pub fn get_file_metadata(file: &File, file_path: &PathBuf) -> Result<FileMetadat
 }
 
 pub fn get_socket_addr() -> Result<SocketAddr, Error> {
-    log!(log::Level::Info, "Getting Ipv6 address..");
     let remote: SocketAddr = "[2606:4700:4700::1111]:53"
         .parse()
         .expect("Failed to parse Ipv6");

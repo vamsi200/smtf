@@ -3,6 +3,7 @@
 #![allow(unused_imports)]
 
 use anyhow::{Error, Ok};
+use arboard::Clipboard;
 use eframe::{Frame, NativeOptions};
 use egui::{Context, FontData, FontDefinitions, Grid, Stroke};
 use log::info;
@@ -60,6 +61,8 @@ fn main() -> Result<(), Error> {
         transfer_progress: None,
         received_handshake_state: None,
         ui_error: None,
+        sender_network_info: None,
+        receiver_network_info: None,
     };
 
     std::thread::spawn(move || {
@@ -67,7 +70,8 @@ fn main() -> Result<(), Error> {
             .expect("entry is closed unexpectedly");
     });
 
-    ui::AppState::app(app_state, ev_rx, cmd_tx, rec_rx, ui_rx, cond_var)
+    let clipboard = Clipboard::new().unwrap();
+    ui::AppState::app(app_state, ev_rx, cmd_tx, rec_rx, ui_rx, cond_var, clipboard)
         .expect("Failed to start gui");
 
     // transfer_code.secret.zeroize();
@@ -155,8 +159,8 @@ pub fn entry_point(
                 _ => {}
             },
             Err(err) => {
-                info!("Receive Error..");
-                return Err(anyhow::Error::new(err));
+                eprintln!("Error: {err}");
+                break Ok(());
             }
         }
     }

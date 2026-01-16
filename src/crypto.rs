@@ -7,8 +7,7 @@ use chacha20poly1305::{
 use hex;
 use hkdf::Hkdf;
 use sha2::{Digest, Sha256};
-use std::ops::Deref;
-use x25519_dalek::{PublicKey, SharedSecret};
+use x25519_dalek::SharedSecret;
 
 #[derive(Clone, Debug)]
 pub struct SessionKeys {

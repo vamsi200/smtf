@@ -114,6 +114,8 @@ pub enum SenderEvent {
     HandshakeDerived(HandshakeData),
     HandshakeState(SenderHandShakeState),
     FileData(FileMetadata),
+    SenderNetworkInfo(SenderNetworkInfo),
+    ReceiverNetworkInfo(ReceiverNetworkInfo),
     Trasnfer(TransferProgress),
     FileHash(FileHash),
     SecretValue(String),
@@ -236,6 +238,18 @@ pub enum SenderHandShakeState {
     DeriveTranscript,
     DeriveSessionKeys,
     HandshakeCompleted,
+}
+
+#[derive(Clone)]
+pub struct SenderNetworkInfo {
+    pub ip: String,
+    pub port: String,
+}
+
+#[derive(Clone)]
+pub struct ReceiverNetworkInfo {
+    pub ip: String,
+    pub port: String,
 }
 
 pub enum ReceiverState {
