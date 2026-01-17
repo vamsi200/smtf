@@ -261,6 +261,8 @@ pub enum ReceiverState {
     FileHash(FileHash),
     RecieveCompleted,
     Error(UiError),
+    SenderNetworkInfo(SenderNetworkInfo),
+    ReceiverNetworkInfo(ReceiverNetworkInfo),
 }
 
 pub enum ReceiverUiState {

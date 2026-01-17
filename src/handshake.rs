@@ -499,11 +499,25 @@ pub fn start_receiver(
     let socket_addr = transfer_code.socket_addr;
     let secret = transfer_code.secret;
 
+    let sender_info = SenderNetworkInfo {
+        ip: socket_addr.ip().to_string(),
+        port: socket_addr.port().to_string(),
+    };
+
+    cmd_tx.send(ReceiverState::SenderNetworkInfo(sender_info));
+
     let mut stream =
         match TcpStream::connect(socket_addr).fatal(&cmd_tx, |_| UiError::ConnectionFailed) {
             Some(s) => s,
             None => return,
         };
+
+    let receiver_info = ReceiverNetworkInfo {
+        ip: stream.local_addr().unwrap().ip().to_string(),
+        port: stream.local_addr().unwrap().port().to_string(),
+    };
+
+    cmd_tx.send(ReceiverState::ReceiverNetworkInfo(receiver_info));
 
     info!("Connected to {socket_addr:?}");
 
