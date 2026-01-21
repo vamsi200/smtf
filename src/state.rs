@@ -271,3 +271,9 @@ pub enum ReceiverUiState {
     Receiving,
     Completed,
 }
+
+#[derive(Clone)]
+pub struct CondState {
+    pub pause: bool,
+    pub error: bool,
+}

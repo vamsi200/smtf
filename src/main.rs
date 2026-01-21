@@ -12,8 +12,8 @@ use smtf::{
     handshake::{self, *},
     helper::{self, get_file_size, get_socket_addr},
     state::{
-        self, BackendState, Command, FileHash, FileMetadata, HandshakeData, ReceiverState,
-        ReceiverUiState, SenderEvent, UiError,
+        self, BackendState, Command, CondState, FileHash, FileMetadata, HandshakeData,
+        ReceiverState, ReceiverUiState, SenderEvent, UiError,
     },
     transfer::send_file,
     ui::{self, AppState},
@@ -46,8 +46,15 @@ fn main() -> Result<(), Error> {
     let (rec_tx, rec_rx) = mpsc::channel::<ReceiverState>();
     let (ui_tx, ui_rx) = mpsc::channel::<ReceiverUiState>();
 
-    let cond_var = Arc::new((Mutex::new(false), Condvar::new()));
-    let cond_var_clone = Arc::clone(&cond_var);
+    let cond_var = Arc::new((
+        Mutex::new(CondState {
+            pause: false,
+            error: false,
+        }),
+        Condvar::new(),
+    ));
+
+    let cond_var_clone = cond_var.clone();
 
     let app_state = AppState {
         handshake_state: None,
@@ -83,7 +90,7 @@ pub fn entry_point(
     cmd_rx: mpsc::Receiver<Command>,
     rec_tx: mpsc::Sender<ReceiverState>,
     ui_tx: mpsc::Sender<ReceiverUiState>,
-    cond_var: Arc<(Mutex<bool>, Condvar)>,
+    cond_var: Arc<(Mutex<CondState>, Condvar)>,
 ) -> Result<(), Error> {
     let mut state = BackendState::Idle;
 
@@ -146,13 +153,11 @@ pub fn entry_point(
                         task.pause.store(true, Ordering::Relaxed);
                         let _ = task.handle.join();
                         state = BackendState::Idle;
-                        info!("Called pause on sender");
                     }
                     if let BackendState::Receving(task) = state {
                         task.pause.store(true, Ordering::Relaxed);
                         let _ = task.handle.join();
                         state = BackendState::Idle;
-                        info!("Called pause on receiver");
                     }
                 }
 

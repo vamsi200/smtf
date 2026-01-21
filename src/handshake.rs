@@ -142,7 +142,7 @@ type Connection = (TcpStream, SocketAddr);
 
 use crate::helper::{get_file_hash, get_file_metadata, get_socket_addr, PREHASH_LIMIT};
 use crate::state::{
-    self, BackendState, Command, FileHash, FileMetadata, HandshakeData, ReceiveHandShakeState,
+    self, BackendState, CondState, FileHash, FileMetadata, HandshakeData, ReceiveHandShakeState,
     ReceiverNetworkInfo, ReceiverState, ReceiverTask, ReceiverUiState, SenderEvent,
     SenderHandShakeState, SenderNetworkInfo, Task, TransferProgress, UiError,
 };
@@ -203,7 +203,7 @@ macro_rules! fatal_or_return {
 pub fn sender(
     ev_tx: mpsc::Sender<SenderEvent>,
     file_path: PathBuf,
-    pause_cond: Arc<(Mutex<bool>, Condvar)>,
+    pause_cond: Arc<(Mutex<CondState>, Condvar)>,
 ) -> Result<Task, Error> {
     let cancel = Arc::new(AtomicBool::new(false));
     let cancel_clone = cancel.clone();
@@ -372,7 +372,7 @@ pub fn sender(
                                 hash.clone(),
                                 ev_tx.clone(),
                                 &cancel_clone,
-                                pause_cond,
+                                &pause_cond,
                                 &pause_clone,
                             );
 
@@ -494,7 +494,7 @@ pub fn start_receiver(
     ui_tx: Sender<ReceiverUiState>,
     cancel: Arc<AtomicBool>,
     pause: Arc<AtomicBool>,
-    pause_cond: Arc<(Mutex<bool>, Condvar)>,
+    cond_state: &Arc<(Mutex<CondState>, Condvar)>,
 ) {
     let socket_addr = transfer_code.socket_addr;
     let secret = transfer_code.secret;
@@ -645,7 +645,7 @@ pub fn start_receiver(
                     &cmd_tx,
                     &cancel,
                     &pause,
-                    pause_cond.clone(),
+                    &cond_state,
                 ) {
                     if let Outcome::Completed = outcome {
                         cmd_tx.send(ReceiverState::RecieveCompleted);
@@ -659,6 +659,8 @@ pub fn start_receiver(
                 break;
             }
         }
+        let _ = stream.shutdown(Shutdown::Both);
+        break;
     }
 }
 
@@ -692,7 +694,7 @@ pub fn receiver(
     transfer_code: TransferCode,
     rec_tx: Sender<ReceiverState>,
     ui_tx: Sender<ReceiverUiState>,
-    pause_cond: Arc<(Mutex<bool>, Condvar)>,
+    state: Arc<(Mutex<CondState>, Condvar)>,
 ) -> Result<ReceiverTask, Error> {
     let (decision_tx, decision_rx) = std::sync::mpsc::channel();
     let pause = Arc::new(AtomicBool::new(false));
@@ -708,7 +710,7 @@ pub fn receiver(
             ui_tx,
             cancel_clone,
             pause_clone,
-            pause_cond,
+            &state,
         )
     });
 

@@ -1,5 +1,5 @@
 #![allow(unused)]
-use crate::handshake::FatalExt;
+use crate::{handshake::FatalExt, state::CondState};
 use anyhow::{Error, Result};
 use blake3::Hash;
 use log::info;
@@ -26,6 +26,20 @@ use std::sync::Condvar;
 enum MsgType {
     Data = 1,
     Eof = 2,
+    Error = 3,
+}
+
+fn read_error(stream: &mut TcpStream) -> bool {
+    let mut buf = [0u8; 1];
+    let _ = stream.read_exact(&mut buf);
+    match buf[0] {
+        3 => true,
+        _ => false,
+    }
+}
+
+fn write_error(stream: &mut TcpStream) {
+    stream.write_all(&[MsgType::Error as u8]);
 }
 
 pub fn send_file(
@@ -35,7 +49,7 @@ pub fn send_file(
     hash: Option<Hash>,
     ev_tx: Sender<SenderEvent>,
     cancel: &Arc<AtomicBool>,
-    pause: Arc<(Mutex<bool>, Condvar)>,
+    state: &Arc<(Mutex<CondState>, Condvar)>,
     is_pause: &Arc<AtomicBool>,
 ) -> (Hash, Outcome) {
     let mut buf = [0u8; 64];
@@ -46,6 +60,16 @@ pub fn send_file(
 
     let mut delta = 0usize;
     let mut result = Outcome::Completed;
+    let mut stream_clone = stream.try_clone().unwrap();
+    let mut ev_tx_clone = ev_tx.clone();
+
+    std::thread::spawn(move || {
+        let s = read_error(&mut stream_clone);
+        if s {
+            ev_tx_clone.send(SenderEvent::Error(UiError::ConnectionFailed));
+            return;
+        }
+    });
 
     if hash.is_none() {
         while let Ok(n) = file.read(&mut buf) {
@@ -55,14 +79,17 @@ pub fn send_file(
             }
 
             if is_pause.load(Ordering::Relaxed) {
-                let (lock, condvar) = &*pause;
+                let (lock, condvar) = &**state;
+                let mut state = lock.lock().unwrap();
 
-                let mut paused = lock.lock().unwrap();
-                while !*paused {
-                    paused = condvar.wait(paused).unwrap();
+                while state.pause && !state.error {
+                    state = condvar.wait(state).unwrap();
+                }
+
+                if state.error {
+                    break;
                 }
             }
-
             if n == 0 {
                 if stream
                     .write_all(&[MsgType::Eof as u8])
@@ -136,17 +163,16 @@ pub fn send_file(
                 None => break,
             };
 
-            if cancel.load(Ordering::Relaxed) {
-                result = Outcome::Cancelled;
-                break;
-            }
-
             if is_pause.load(Ordering::Relaxed) {
-                let (lock, condvar) = &*pause;
+                let (lock, condvar) = &**state;
+                let mut state = lock.lock().unwrap();
 
-                let mut paused = lock.lock().unwrap();
-                while *paused {
-                    paused = condvar.wait(paused).unwrap();
+                while state.pause && !state.error {
+                    state = condvar.wait(state).unwrap();
+                }
+
+                if state.error {
+                    break;
                 }
             }
 
@@ -230,7 +256,7 @@ pub fn receive_file(
     ev_tx: &Sender<ReceiverState>,
     cancel: &Arc<AtomicBool>,
     is_pause: &Arc<AtomicBool>,
-    pause: Arc<(Mutex<bool>, Condvar)>,
+    state: &Arc<(Mutex<CondState>, Condvar)>,
 ) -> Result<Outcome, Error> {
     let mut delta: usize = 0;
     let mut result = Outcome::Completed;
@@ -248,17 +274,21 @@ pub fn receive_file(
         }
 
         if is_pause.load(Ordering::Relaxed) {
-            let (lock, condvar) = &*pause;
+            let (lock, condvar) = &**state;
+            let mut state = lock.lock().unwrap();
 
-            let mut paused = lock.lock().unwrap();
-            while *paused {
-                paused = condvar.wait(paused).unwrap();
+            while state.pause && !state.error {
+                state = condvar.wait(state).unwrap();
+            }
+
+            if state.error {
+                let _ = write_error(stream);
+                break;
             }
         }
 
         if cancel.load(Ordering::Relaxed) {
             result = Outcome::Cancelled;
-            let _ = stream.shutdown(std::net::Shutdown::Both);
             break;
         }
 

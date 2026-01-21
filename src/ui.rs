@@ -15,12 +15,10 @@ use std::{
 };
 
 use crate::{
-    handshake::{decode, encode, sender, Decision},
+    handshake::{Decision, decode, encode, sender},
     helper::get_socket_addr,
     state::{
-        Command, FileHash, FileMetadata, HandshakeData, ReceiveHandShakeState, ReceiverNetworkInfo,
-        ReceiverUiState, SenderEvent, SenderHandShakeState, SenderNetworkInfo, TransferProgress,
-        UiError,
+        Command, CondState, FileHash, FileMetadata, HandshakeData, ReceiveHandShakeState, ReceiverNetworkInfo, ReceiverUiState, SenderEvent, SenderHandShakeState, SenderNetworkInfo, TransferProgress, UiError
     },
     transfer::Outcome,
 };
@@ -48,7 +46,7 @@ impl AppState {
         cmd_tx: Sender<Command>,
         rec_rx: Receiver<ReceiverState>,
         ui_rx: Receiver<ReceiverUiState>,
-        cond_var: Arc<(Mutex<bool>, Condvar)>,
+        cond_var: Arc<(Mutex<CondState>, Condvar)>,
         mut clipboard: Clipboard,
     ) -> eframe::Result<()> {
         let options = NativeOptions {
@@ -125,6 +123,7 @@ impl AppState {
                             &mut cancel_confirm,
                             true,
                             &mut mode,
+                            &cond_var,
                             || {
                                 cmd_tx.send(Command::Cancel);
                             },
@@ -192,7 +191,7 @@ impl AppState {
                             }
 
                             completion_popup(ctx, self.is_sent, &mut mode, true);
-                            error_popup(ctx, &mut self.ui_error, &mut mode);
+                            error_popup(ctx, &mut self.ui_error, &mut mode, &cond_var);
                         });
                     }
 
@@ -212,6 +211,7 @@ impl AppState {
                             &mut cancel_confirm,
                             false,
                             &mut mode,
+                        &cond_var,
                             || {
                                 cmd_tx.send(Command::Cancel);
                             },
@@ -328,7 +328,7 @@ impl AppState {
                             &mut mode,
                             false,
                         );
-                        error_popup(ctx, &mut self.ui_error, &mut mode);
+                        error_popup(ctx, &mut self.ui_error, &mut mode, &cond_var);
                     }
                 });
         })
@@ -967,7 +967,7 @@ fn progress_bar(
     ui: &mut Ui,
     progress: &TransferProgress,
     cmd_tx: &Sender<Command>,
-    condvar: &Arc<(Mutex<bool>, Condvar)>,
+    condvar: &Arc<(Mutex<CondState>, Condvar)>,
 ) {
     ui.add_space(8.0);
 
@@ -1129,16 +1129,17 @@ fn progress_bar(
 
             if pause_btn.clicked() {
                 let _ = cmd_tx.send(Command::Pause);
-                let (lock, _) = &**condvar;
-                let mut paused = lock.lock().unwrap();
-                *paused = true;
+                let (lock, cond_var) = &**condvar;
+                let mut state = lock.lock().unwrap();
+                state.pause = true;
+                cond_var.notify_all();
             }
 
             if resume_btn.clicked() {
-                let (lock, condvar) = &**condvar;
-                let mut paused = lock.lock().unwrap();
-                *paused = false;
-                condvar.notify_all();
+                let (lock, cond_var) = &**condvar;
+                let mut state = lock.lock().unwrap();
+                state.pause = false;
+                cond_var.notify_all();
             }
         });
 
@@ -1183,6 +1184,7 @@ fn cancel_transfer_popup_command_style(
     confirm: &mut CancelConfirm,
     is_sending: bool,
     mode: &mut Mode,
+    condvar: &Arc<(Mutex<CondState>, Condvar)>,
     on_confirm_cancel: impl FnOnce(),
 ) {
     if !confirm.open {
@@ -1246,9 +1248,15 @@ fn cancel_transfer_popup_command_style(
                 }
 
                 if cancel_btn.clicked() {
+                    let (lock, condvar) = &**condvar;
+                    let mut state = lock.lock().unwrap();
+                    state.error = true;
+                    condvar.notify_all();
+
                     confirm.open = false;
                     on_confirm_cancel();
                     *mode = Mode::Idle;
+
                 }
             });
 
@@ -1881,7 +1889,7 @@ fn terminal_kv(ui: &mut Ui, key: &str, value: &str) {
     });
 }
 
-fn error_popup(ctx: &egui::Context, error: &mut Option<UiError>, mode: &mut Mode) {
+fn error_popup(ctx: &egui::Context, error: &mut Option<UiError>, mode: &mut Mode, condvar: &Arc<(Mutex<CondState>, Condvar)>) {
     let Some(err) = error else { return };
     let err = err.clone();
 
@@ -1961,6 +1969,11 @@ fn error_popup(ctx: &egui::Context, error: &mut Option<UiError>, mode: &mut Mode
                 );
 
                 if ok_btn.clicked() {
+                    let (lock, state) = &**condvar;
+                    let mut lock = lock.lock().unwrap();
+                    lock.error = true;
+                    state.notify_all();
+
                     *error = None;
                     *mode = Mode::Idle;
                 }
