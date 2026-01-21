@@ -388,8 +388,8 @@ pub fn sender(
                         }
 
                         Decision::Reject => {
-                            info!("Receiver cancelled..");
-                            let _ = stream.shutdown(Shutdown::Both);
+                            let _ = ev_tx.send(SenderEvent::TransferCancelled);
+                            break;
                         }
                     }
 

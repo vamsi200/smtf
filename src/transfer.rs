@@ -66,7 +66,7 @@ pub fn send_file(
     std::thread::spawn(move || {
         let s = read_error(&mut stream_clone);
         if s {
-            ev_tx_clone.send(SenderEvent::Error(UiError::ConnectionFailed));
+            ev_tx_clone.send(SenderEvent::Error(UiError::ConnectionFailed)); // This context of error is fine, for now..
             return;
         }
     });

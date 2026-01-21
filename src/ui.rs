@@ -31,6 +31,7 @@ pub struct AppState {
     pub completion_status: Option<ReceiverState>,
     pub is_sending: bool,
     pub is_sent: bool,
+    pub is_transfer_cancelled: bool,
     pub ui_state: Option<ReceiverUiState>,
     pub transfer_progress: Option<TransferProgress>,
     pub received_handshake_state: Option<ReceiveHandShakeState>,
@@ -82,6 +83,8 @@ impl AppState {
                         self.received_handshake_state = None;
                         self.sender_network_info = None;
                         self.receiver_network_info = None;
+                        self.is_transfer_cancelled = false;
+                        receiver_secret = String::new();
 
                         ui.vertical_centered(|ui| {
                             ui.add_space(50.0);
@@ -156,6 +159,9 @@ impl AppState {
                                     SenderEvent::ReceiverNetworkInfo(rn) => {
                                         self.receiver_network_info = Some(rn)
                                     }
+                                    SenderEvent::TransferCancelled => {
+                                        self.is_transfer_cancelled = true
+                                    }
 
                                     _ => {}
                                 }
@@ -192,6 +198,7 @@ impl AppState {
 
                             completion_popup(ctx, self.is_sent, &mut mode, true);
                             error_popup(ctx, &mut self.ui_error, &mut mode, &cond_var);
+                            receiver_cancelled_popup(ctx, &mut self.is_transfer_cancelled, &mut mode);
                         });
                     }
 
@@ -686,7 +693,7 @@ fn sender_status_card(
         ui.add_space(10.0);
 
         let is_peer_connected = match handshake_state {
-            SenderHandShakeState::VerifyingSecret => true,
+            SenderHandShakeState::VerifyingSecret => false,
             SenderHandShakeState::Initialized => false,
             SenderHandShakeState::SecretDerived => false,
             _ => true,
@@ -703,6 +710,10 @@ fn sender_status_card(
         if is_peer_connected && !prev_connected {
             is_expanded = false;
             ui.data_mut(|d| d.insert_temp(expanded_id, false));
+        }else {
+            is_expanded = true;
+            ui.data_mut(|d| d.insert_temp(expanded_id, true));
+
         }
 
         ui.data_mut(|d| d.insert_temp(expanded_id.with("prev_connected"), is_peer_connected));
@@ -2082,6 +2093,87 @@ fn mode_selection_card(ui: &mut egui::Ui, mode: &mut Mode, cmd_tx: &Sender<Comma
             }
         });
 }
+
+fn receiver_cancelled_popup(
+    ctx: &egui::Context,
+    is_declined: &mut bool,
+    mode: &mut Mode,
+) {
+    if !*is_declined {
+        return;
+    }
+
+    let accent = egui::Color32::from_rgb(180, 100, 255);
+    let mut window_open = true;
+
+    egui::Window::new("")
+        .open(&mut window_open)
+        .title_bar(false)
+        .collapsible(false)
+        .resizable(false)
+        .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
+        .frame(
+            egui::Frame::popup(&ctx.style())
+                .corner_radius(2.0)
+                .inner_margin(egui::Margin::same(20))
+                .stroke(egui::Stroke::new(1.0, egui::Color32::from_gray(60)))
+                .fill(egui::Color32::from_rgb(15, 15, 20)),
+        )
+        .show(ctx, |ui| {
+            ui.set_width(420.0);
+
+            ui.horizontal(|ui| {
+                ui.colored_label(accent, "> ");
+                ui.label(
+                    egui::RichText::new("TRANSFER CANCELLED")
+                        .color(accent)
+                        .monospace()
+                        .strong(),
+                );
+            });
+
+            ui.add_space(15.0);
+            ui.separator();
+            ui.add_space(15.0);
+
+            ui.label(
+                egui::RichText::new(
+                    "The receiver has cancelled the file transfer.",
+                )
+                .monospace()
+                .color(egui::Color32::from_gray(220)),
+            );
+
+            ui.add_space(20.0);
+            ui.separator();
+            ui.add_space(20.0);
+
+            // Action
+            ui.horizontal(|ui| {
+                let ok_btn = ui.add(
+                    egui::Button::new(
+                        egui::RichText::new("[ OK ]")
+                            .monospace()
+                            .color(egui::Color32::from_rgb(180, 180, 180)),
+                    )
+                    .fill(egui::Color32::from_rgb(25, 25, 30))
+                    .stroke(egui::Stroke::new(1.0, egui::Color32::from_gray(120)))
+                    .corner_radius(2.0),
+                );
+
+                if ok_btn.clicked() {
+                    *is_declined = false;
+                    *mode = Mode::Idle;
+                }
+            });
+        });
+
+    if !window_open {
+        *is_declined = false;
+        *mode = Mode::Idle;
+    }
+}
+
 
 fn hash_display(ui: &mut egui::Ui, hash: &str, _: egui::Color32) {
     ui.horizontal(|ui| {

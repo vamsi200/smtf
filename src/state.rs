@@ -121,6 +121,7 @@ pub enum SenderEvent {
     SecretValue(String),
     PeerConnected(SocketAddr),
     TransferStarted,
+    TransferCancelled,
     TransferCompleted,
     Error(UiError),
 }

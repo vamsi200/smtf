@@ -70,6 +70,7 @@ fn main() -> Result<(), Error> {
         ui_error: None,
         sender_network_info: None,
         receiver_network_info: None,
+        is_transfer_cancelled: false,
     };
 
     std::thread::spawn(move || {
