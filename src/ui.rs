@@ -31,6 +31,7 @@ pub struct AppState {
     pub completion_status: Option<ReceiverState>,
     pub is_sending: bool,
     pub is_sent: bool,
+    pub is_expanded: bool,
     pub is_transfer_cancelled: bool,
     pub ui_state: Option<ReceiverUiState>,
     pub transfer_progress: Option<TransferProgress>,
@@ -61,6 +62,7 @@ impl AppState {
         let mut mode = Mode::Idle;
         let mut receiver_secret = String::new();
         let mut cancel_confirm = CancelConfirm::default();
+        let expanded_id = egui::Id::new("receiver_secret_expanded");
 
         eframe::run_simple_native("SMTF", options, move |ctx, _frame| {
             ctx.request_repaint();
@@ -167,9 +169,17 @@ impl AppState {
                                 }
                             }
 
+
                             if let (Some(handshake_state), Some(hd)) =
                                 (&self.handshake_state, &self.handshake_data)
                             {
+                            let is_peer_connected = match handshake_state {
+                                SenderHandShakeState::VerifyingSecret => false,
+                                SenderHandShakeState::Initialized => false,
+                                SenderHandShakeState::SecretDerived => false,
+                                _ => true,
+                            };
+
                                 sender_status_card(
                                     ui,
                                     handshake_state,
@@ -177,6 +187,8 @@ impl AppState {
                                     self.is_sending,
                                     self.is_sent,
                                     &mut clipboard,
+                                    &mut self.is_expanded,
+                                    is_peer_connected
                                 );
                             }
 
@@ -290,6 +302,7 @@ impl AppState {
                                     self.completion_status,
                                     Some(ReceiverState::RecieveCompleted)
                                 ),
+                                &mut self.is_expanded,
                             );
                             ui.add_space(5.0);
 
@@ -586,6 +599,8 @@ fn sender_status_card(
     is_sending: bool,
     is_sent: bool,
     clipboard: &mut Clipboard,
+    is_expanded: &mut bool,
+    is_peer_connected: bool,
 ) {
     let accent = Color32::from_rgb(100, 180, 255);
     let expanded_id = egui::Id::new("transfer_secret_expanded");
@@ -691,36 +706,17 @@ fn sender_status_card(
         ui.add_space(10.0);
         ui.separator();
         ui.add_space(10.0);
-
-        let is_peer_connected = match handshake_state {
-            SenderHandShakeState::VerifyingSecret => false,
-            SenderHandShakeState::Initialized => false,
-            SenderHandShakeState::SecretDerived => false,
-            _ => true,
-        };
-
-        let mut is_expanded = ui.data_mut(|d| d.get_temp(expanded_id).unwrap_or(true));
-
         const SECRET_PANEL_WIDTH: f32 = 360.0;
 
-        let prev_connected = ui
-            .data_mut(|d| d.get_temp::<bool>(expanded_id.with("prev_connected")))
-            .unwrap_or(false);
-
-        if is_peer_connected && !prev_connected {
-            is_expanded = false;
-            ui.data_mut(|d| d.insert_temp(expanded_id, false));
-        }else {
-            is_expanded = true;
-            ui.data_mut(|d| d.insert_temp(expanded_id, true));
-
+        if is_peer_connected{ 
+            *is_expanded = false;
         }
 
         ui.data_mut(|d| d.insert_temp(expanded_id.with("prev_connected"), is_peer_connected));
 
         ui.vertical(|ui| {
             ui.horizontal(|ui| {
-                let arrow = if is_expanded { "▼" } else { "▶" };
+                let arrow = if *is_expanded { "▼" } else { "▶" };
 
                 let arrow_response = ui.add(
                     egui::Label::new(RichText::new(arrow).monospace().color(
@@ -741,7 +737,7 @@ fn sender_status_card(
                     },
                 ));
 
-                if !is_expanded {
+                if !*is_expanded {
                     ui.add_space(6.0);
                     ui.label(
                         RichText::new("(click to show secret code)")
@@ -751,12 +747,11 @@ fn sender_status_card(
                 }
 
                 if arrow_response.clicked() {
-                    is_expanded = !is_expanded;
-                    ui.data_mut(|d| d.insert_temp(expanded_id, is_expanded));
+                    *is_expanded = !*is_expanded;
                 }
             });
 
-            if is_expanded {
+            if *is_expanded {
                 ui.horizontal(|ui| {
                     ui.label(RichText::new("Code:").color(Color32::from_gray(150)));
 
@@ -841,12 +836,11 @@ fn sender_card_single_box(
                 ui.vertical(|ui| {
                     file_info_box(ui, accent, data, &hash);
                 });
-                ui.add_space(30.0);
+                        ui.add_space(50.0);
+
                 ui.vertical(|ui| {
                     network_box(ui, accent, &sender_data, &receiver_data);
                 });
-                ui.add_space(30.0);
-                security_box(ui, accent);
             });
         } else if ui.available_width() >= 1000.0 {
             ui.horizontal_centered(|ui| {
@@ -854,18 +848,17 @@ fn sender_card_single_box(
                     file_info_box(ui, accent, data, &hash);
                 });
 
+                        ui.add_space(50.0);
+
                 ui.vertical(|ui| {
                     network_box(ui, accent, &sender_data, &receiver_data);
                 });
-                security_box(ui, accent);
+
             });
         } else {
             ui.vertical_centered(|ui| {
                 file_info_box(ui, accent, data, &hash);
-                ui.add_space(20.0);
                 network_box(ui, accent, &sender_data, &receiver_data);
-                ui.add_space(30.0);
-                security_box(ui, accent);
             });
         }
     });
@@ -928,39 +921,6 @@ fn network_box(
         terminal_kv(ui, "Peer Port", &receiver.port);
         terminal_kv(ui, "Transport", "TCP");
         terminal_kv(ui, "Role", "Sender");
-    });
-}
-
-fn security_box(ui: &mut Ui, accent: Color32) {
-    ui.vertical(|ui| {
-        ui.set_min_width(260.0);
-        ui.set_max_width(360.0);
-
-        ui.label(
-            egui::RichText::new("SECURITY")
-                .monospace()
-                .strong()
-                .color(accent),
-        );
-
-        ui.add_space(8.0);
-
-        let frame = egui::Frame::new()
-            .fill(Color32::from_rgb(25, 25, 30))
-            .stroke(Stroke::new(1.0, Color32::from_gray(70)))
-            .inner_margin(Margin::symmetric(10, 10))
-            .corner_radius(2.0);
-
-        frame.show(ui, |ui| {
-            ui.set_max_width(360.0);
-
-            terminal_kv(ui, "Key Exchange", "X25519");
-            terminal_kv(ui, "Key Derivation", "HKDF");
-            terminal_kv(ui, "Encryption", "ChaCha20-Poly1305");
-            terminal_kv(ui, "Forward Secrecy", "Yes");
-            terminal_kv(ui, "File Hash", "BLAKE3");
-            terminal_kv(ui, "Secret Code", "Base32");
-        });
     });
 }
 
@@ -1539,10 +1499,9 @@ fn initial_receive_card(
     handshake_state: &Option<ReceiveHandShakeState>,
     is_receiving: bool,
     received: bool,
+    is_expanded: &mut bool,
 ) {
     let accent = Color32::from_rgb(180, 100, 255);
-
-    
     let status_frame = egui::Frame::window(&ui.style())
         .fill(Color32::from_rgb(15, 15, 20))
         .stroke(Stroke::new(1.0, Color32::from_gray(60)))
@@ -1550,7 +1509,6 @@ fn initial_receive_card(
         .corner_radius(2.0);
 
     status_frame.show(ui, |ui| {
-        
         ui.horizontal(|ui| {
             ui.label(
                 RichText::new("> [STATUS]")
@@ -1561,9 +1519,6 @@ fn initial_receive_card(
         });
         ui.add_space(8.0);
 
-        
-        
-        
         if let Some(state) = handshake_state {
             ui.horizontal_wrapped(|ui| {
                 ui.spacing_mut().item_spacing.x = 4.0;
@@ -1602,7 +1557,6 @@ fn initial_receive_card(
                     }
                 }
 
-                
                 if is_receiving || received {
                     ui.colored_label(Color32::from_gray(80), " › ");
                     ui.label(RichText::new("Receiving").monospace().color(if received {
@@ -1629,26 +1583,14 @@ fn initial_receive_card(
         ui.separator();
         ui.add_space(10.0);
 
-        
-        
-        
         let lock_secret = is_receiving || received;
-        let expanded_id = egui::Id::new("receiver_secret_expanded");
 
-        
-        let mut is_expanded = ui
-            .data_mut(|d| d.get_temp(expanded_id))
-            .unwrap_or(!lock_secret);
-
-        
-        if lock_secret && is_expanded {
-            is_expanded = false;
-            ui.data_mut(|d| d.insert_temp(expanded_id, false));
+        if lock_secret && *is_expanded {
+            *is_expanded = false;
         }
 
-        
         ui.horizontal(|ui| {
-            let arrow = if is_expanded { "▼" } else { "▶" };
+            let arrow = if *is_expanded { "▼" } else { "▶" };
 
             let arrow_label = egui::Label::new(
                 RichText::new(arrow).monospace().color(if lock_secret {
@@ -1675,7 +1617,7 @@ fn initial_receive_card(
                     }),
             );
 
-            if !is_expanded {
+            if !*is_expanded {
                 ui.add_space(6.0);
                 ui.label(
                     RichText::new(if lock_secret {
@@ -1688,14 +1630,12 @@ fn initial_receive_card(
                 );
             }
 
-            if arrow_resp.clicked() && !lock_secret {
-                is_expanded = !is_expanded;
-                ui.data_mut(|d| d.insert_temp(expanded_id, is_expanded));
+            if arrow_resp.clicked() && !*is_expanded {
+                *is_expanded = !*is_expanded;
             }
         });
 
-        
-        if is_expanded {
+        if *is_expanded {
             ui.add_space(8.0);
 
             ui.horizontal(|ui| {
@@ -1705,7 +1645,6 @@ fn initial_receive_card(
                         .color(Color32::from_gray(150)),
                 );
 
-                
                 ui.add(
                     TextEdit::singleline(secret)
                         .font(FontId::monospace(18.0))
@@ -1790,7 +1729,8 @@ fn receiver_card_single_box(
                             file_info_box(ui, accent, data, &hash);
                         });
 
-                        ui.add_space(30.0);
+                                ui.add_space(50.0);
+
 
                         if let (Some(sender), Some(receiver)) =
                             (sender_data.as_ref(), receiver_data.as_ref())
@@ -1800,11 +1740,8 @@ fn receiver_card_single_box(
                             });
                         }
 
-                        ui.add_space(30.0);
-
-                        ui.vertical(|ui| {
-                            security_box(ui, accent);
-                        });
+                        ui.add_space(50.0);
+                       
                     });
                 } else if available >= 1000.0 {
                     ui.horizontal_centered(|ui| {
@@ -1812,6 +1749,8 @@ fn receiver_card_single_box(
                             file_info_box(ui, accent, data, &hash);
                         });
 
+                            ui.add_space(50.0);
+
                         if let (Some(sender), Some(receiver)) =
                             (sender_data.as_ref(), receiver_data.as_ref())
                         {
@@ -1819,16 +1758,12 @@ fn receiver_card_single_box(
                                 receive_network_box(ui, accent, sender, receiver);
                             });
                         }
-
-                        ui.vertical(|ui| {
-                            security_box(ui, accent);
-                        });
                     });
                 } else {
                     ui.vertical_centered(|ui| {
                         file_info_box(ui, accent, data, &hash);
 
-                        ui.add_space(20.0);
+                        ui.add_space(50.0);
 
                         if let (Some(sender), Some(receiver)) =
                             (sender_data.as_ref(), receiver_data.as_ref())
@@ -1836,9 +1771,8 @@ fn receiver_card_single_box(
                             receive_network_box(ui, accent, sender, receiver);
                         }
 
-                        ui.add_space(30.0);
+                        ui.add_space(50.0);
 
-                        security_box(ui, accent);
                     });
                 }
             }

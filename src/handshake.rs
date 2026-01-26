@@ -17,8 +17,6 @@ use std::io::{Read, Write};
 use std::net::{
     Ipv6Addr, Shutdown, SocketAddr, SocketAddrV6, TcpListener, TcpStream, ToSocketAddrs, UdpSocket,
 };
-use std::os::unix::fs::MetadataExt;
-use std::os::unix::process;
 use std::path::{Path, PathBuf};
 use std::process::exit;
 use std::str::FromStr;
@@ -399,6 +397,7 @@ pub fn sender(
 
                 Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
                     std::thread::sleep(std::time::Duration::from_millis(50));
+                    continue;
                 }
 
                 Err(e) => {

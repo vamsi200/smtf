@@ -52,7 +52,7 @@ pub fn send_file(
     state: &Arc<(Mutex<CondState>, Condvar)>,
     is_pause: &Arc<AtomicBool>,
 ) -> (Hash, Outcome) {
-    let mut buf = [0u8; 64];
+    let mut buf = [0u8; 64 * 1024];
     let mut hasher = blake3::Hasher::new();
 
     file.seek(SeekFrom::Start(0)).expect("Failed to seek");

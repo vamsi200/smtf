@@ -23,7 +23,6 @@ use std::{
     fs::File,
     io::{Read, Write},
     net::{Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV6, TcpListener, TcpStream, UdpSocket},
-    os::unix::fs::MetadataExt,
     path::PathBuf,
     str::FromStr,
     sync::{
@@ -71,6 +70,7 @@ fn main() -> Result<(), Error> {
         sender_network_info: None,
         receiver_network_info: None,
         is_transfer_cancelled: false,
+        is_expanded: true,
     };
 
     std::thread::spawn(move || {
