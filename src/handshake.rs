@@ -505,9 +505,14 @@ pub fn start_receiver(
 
     cmd_tx.send(ReceiverState::SenderNetworkInfo(sender_info));
 
+    cmd_tx.send(ReceiverState::Connecting);
+
     let mut stream =
         match TcpStream::connect(socket_addr).fatal(&cmd_tx, |_| UiError::ConnectionFailed) {
-            Some(s) => s,
+            Some(s) => {
+                cmd_tx.send(ReceiverState::Connected);
+                s
+            }
             None => return,
         };
 

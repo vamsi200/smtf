@@ -8,10 +8,9 @@ use rfd::FileDialog;
 use std::{
     net::TcpListener,
     sync::{
-        mpsc::{Receiver, Sender},
-        Arc, Condvar, Mutex,
+        Arc, Condvar, Mutex, mpsc::{Receiver, Sender}
     },
-    time::Instant,
+    time::{Duration, Instant},
 };
 
 use crate::{
@@ -39,6 +38,7 @@ pub struct AppState {
     pub ui_error: Option<UiError>,
     pub sender_network_info: Option<SenderNetworkInfo>,
     pub receiver_network_info: Option<ReceiverNetworkInfo>,
+    pub popup_state: PopupState,
 }
 
 impl AppState {
@@ -86,6 +86,7 @@ impl AppState {
                         self.sender_network_info = None;
                         self.receiver_network_info = None;
                         self.is_transfer_cancelled = false;
+
                         receiver_secret = String::new();
 
                         ui.vertical_centered(|ui| {
@@ -123,6 +124,8 @@ impl AppState {
                             cancel_confirm.open = true;
                         }
 
+                        generic_popup(ctx,&mut  self.popup_state, true);
+
                         cancel_transfer_popup_command_style(
                             ctx,
                             &mut cancel_confirm,
@@ -150,7 +153,7 @@ impl AppState {
                                         self.handshake_state = Some(hs)
                                     }
                                     SenderEvent::Trasnfer(tp) => self.transfer_progress = Some(tp),
-                                    SenderEvent::TransferStarted => self.is_sending = true,
+                                    SenderEvent::TransferStarted => {self.is_sending = true},
                                     SenderEvent::TransferCompleted => self.is_sent = true,
                                     SenderEvent::Error(ui_err) => {
                                         self.ui_error = Some(ui_err);
@@ -188,7 +191,9 @@ impl AppState {
                                     self.is_sent,
                                     &mut clipboard,
                                     &mut self.is_expanded,
-                                    is_peer_connected
+                                    is_peer_connected,
+                                    &mut self.popup_state,
+                                    ctx
                                 );
                             }
 
@@ -211,6 +216,9 @@ impl AppState {
                             completion_popup(ctx, self.is_sent, &mut mode, true);
                             error_popup(ctx, &mut self.ui_error, &mut mode, &cond_var);
                             receiver_cancelled_popup(ctx, &mut self.is_transfer_cancelled, &mut mode);
+
+                            
+
                         });
                     }
 
@@ -225,6 +233,8 @@ impl AppState {
                             cancel_confirm.open = true;
                         }
 
+                        generic_popup(ctx,&mut  self.popup_state, false);
+
                         cancel_transfer_popup_command_style(
                             ctx,
                             &mut cancel_confirm,
@@ -238,6 +248,12 @@ impl AppState {
 
                         while let Ok(ev) = rec_rx.try_recv() {
                             match ev {
+                                ReceiverState::Connecting => {
+                                        self.popup_state = PopupState { popup: Some(PopupKind::Connecting), popup_since: ctx.input(|x|x.time) };
+                                }
+                                ReceiverState::Connected => {
+                                    self.popup_state = PopupState { popup: Some(PopupKind::Connected), popup_since: ctx.input(|x|x.time) };
+                                }
                                 ReceiverState::FileState(meta) => {
                                     self.file_metadata = Some(meta);
                                 }
@@ -251,6 +267,7 @@ impl AppState {
                                     self.received_handshake_state = Some(hs);
                                 }
                                 ReceiverState::ReceivedBytes(bytes) => {
+
                                     if let Some(meta) = &self.file_metadata {
                                         let tp = TransferProgress {
                                             sent: bytes,
@@ -353,6 +370,58 @@ impl AppState {
                 });
         })
     }
+}
+
+pub enum PopupKind {
+    Connecting,
+    Connected,
+    Copied,
+}
+
+pub struct PopupState {
+    pub popup: Option<PopupKind>,
+    pub popup_since: f64,
+}
+
+pub fn generic_popup(ctx: &egui::Context, ui_state: &mut PopupState, is_sender: bool) {
+    let Some(kind) = &ui_state.popup else { return };
+
+    let elapsed = ctx.input(|i| i.time) - ui_state.popup_since;
+
+    if elapsed > 1.0 {
+        ui_state.popup = None;  
+        return;
+    }
+
+    let text = match kind {
+        PopupKind::Connecting => "> trying to connect",
+        PopupKind::Connected  => "> successfully connected",
+        PopupKind::Copied     => "> successfully copied",
+    };
+
+    let accent = if is_sender {
+            Color32::from_rgb(100, 180, 255)
+
+    } else {Color32::from_rgb(180, 100, 255)};
+
+    egui::Area::new(Id::new("connection_popup"))
+        .anchor(egui::Align2::RIGHT_BOTTOM, egui::vec2(-16.0, -16.0))
+        .order(egui::Order::Foreground)
+        .interactable(false)
+        .show(ctx, |ui| {
+            egui::Frame::new()
+                .fill(egui::Color32::from_rgb(15, 15, 20))
+                .stroke(egui::Stroke::new(1.0, egui::Color32::from_gray(60)))
+                .corner_radius(egui::CornerRadius::same(2))
+                .inner_margin(egui::Margin::same(10))
+                .show(ui, |ui| {
+                    ui.label(
+                        egui::RichText::new(text)
+                            .monospace()
+                            .color(accent),
+                    );
+                });
+        });
 }
 
 fn completion_popup(ctx: &egui::Context, is_completed: bool, mode: &mut Mode, is_sending: bool) {
@@ -601,6 +670,8 @@ fn sender_status_card(
     clipboard: &mut Clipboard,
     is_expanded: &mut bool,
     is_peer_connected: bool,
+    is_copied: &mut PopupState,
+    ctx: &Context
 ) {
     let accent = Color32::from_rgb(100, 180, 255);
     let expanded_id = egui::Id::new("transfer_secret_expanded");
@@ -771,7 +842,10 @@ fn sender_status_card(
                         Layout::right_to_left(Align::Center),
                         |ui| {
                             if action_button_compact(ui, "Copy", accent).clicked() {
-                                clipboard.set_text(secret_code);
+                                if let Ok(_) = clipboard.set_text(secret_code) {
+                                    *is_copied = PopupState { popup: Some(PopupKind::Copied), popup_since: ctx.input(|x|x.time) };
+
+                                }
                             }
                         },
                     );
@@ -1741,7 +1815,6 @@ fn receiver_card_single_box(
                         }
 
                         ui.add_space(50.0);
-                       
                     });
                 } else if available >= 1000.0 {
                     ui.horizontal_centered(|ui| {

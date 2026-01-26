@@ -254,6 +254,8 @@ pub struct ReceiverNetworkInfo {
 }
 
 pub enum ReceiverState {
+    Connecting,
+    Connected,
     SecretValue(String),
     HandshakeState(ReceiveHandShakeState),
     ReceivedBytes(usize),

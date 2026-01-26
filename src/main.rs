@@ -4,7 +4,7 @@
 
 use anyhow::{Error, Ok};
 use arboard::Clipboard;
-use eframe::{Frame, NativeOptions};
+use eframe::{glow::NONE, Frame, NativeOptions};
 use egui::{Context, FontData, FontDefinitions, Grid, Stroke};
 use log::info;
 use rfd::FileDialog;
@@ -16,7 +16,7 @@ use smtf::{
         ReceiverState, ReceiverUiState, SenderEvent, UiError,
     },
     transfer::send_file,
-    ui::{self, AppState},
+    ui::{self, AppState, PopupState},
 };
 use std::{
     env::{self, Args},
@@ -71,6 +71,10 @@ fn main() -> Result<(), Error> {
         receiver_network_info: None,
         is_transfer_cancelled: false,
         is_expanded: true,
+        popup_state: PopupState {
+            popup: None,
+            popup_since: 0.0,
+        },
     };
 
     std::thread::spawn(move || {
