@@ -217,8 +217,6 @@ impl AppState {
                             error_popup(ctx, &mut self.ui_error, &mut mode, &cond_var);
                             receiver_cancelled_popup(ctx, &mut self.is_transfer_cancelled, &mut mode);
 
-                            
-
                         });
                     }
 
@@ -887,63 +885,77 @@ fn sender_card_single_box(
     let outer_frame = egui::Frame::window(&ui.style())
         .fill(Color32::from_rgb(15, 15, 20))
         .stroke(egui::Stroke::new(1.0, Color32::from_gray(60)))
-        .inner_margin(egui::Margin::same(20))
-        .corner_radius(2.0);
+        .inner_margin(egui::Margin::same(10))
+        .corner_radius(1.0);
 
     outer_frame.show(ui, |ui| {
-        ui.set_min_width(ui.available_width());
+          let full_width = ui.available_width();
+    ui.set_width(full_width);
 
-        ui.horizontal(|ui| {
-            ui.colored_label(accent, "> ");
-            ui.label(
-                egui::RichText::new("[OVERVIEW]")
-                    .color(accent)
-                    .monospace()
-                    .strong(),
-            );
-        });
+    let available = ui.available_width();
+    let card_width = 500.0;
+    let card_gap = 50.0;
 
-        ui.add_space(15.0);
-
-        if ui.available_width() >= 1920.0 {
-            ui.horizontal_centered(|ui| {
-                ui.vertical(|ui| {
-                    file_info_box(ui, accent, data, &hash);
-                });
-                        ui.add_space(50.0);
-
-                ui.vertical(|ui| {
-                    network_box(ui, accent, &sender_data, &receiver_data);
-                });
+    if available >= (card_width * 3.0 + card_gap * 2.0) {
+        ui.horizontal_centered(|ui| {
+            ui.vertical(|ui| {
+                ui.set_width(card_width);
+                file_info_box(ui, accent, data, &hash);
             });
-        } else if ui.available_width() >= 1000.0 {
-            ui.horizontal_centered(|ui| {
-                ui.vertical(|ui| {
-                    file_info_box(ui, accent, data, &hash);
+
+            ui.add_space(card_gap);
+
+            ui.vertical(|ui| {
+                ui.set_width(card_width);
+                network_box(ui, accent, &sender_data, &receiver_data);
+            });
+
+              ui.vertical(|ui| {
+                ui.set_width(card_width);
+                security_box(ui, accent);
+            });
+        });
+    } else if available >= (card_width * 2.0 + card_gap) {
+            ui.vertical_centered(|ui| {
+                ui.horizontal(|ui| {
+                    ui.vertical(|ui| {
+                        ui.set_width(card_width);
+                        file_info_box(ui, accent, data, &hash);
+                    });
+
+                    ui.add_space(card_gap);
+
+                    ui.vertical(|ui| {
+                        ui.set_width(card_width);
+                        network_box(ui, accent, &sender_data, &receiver_data);
+                    });
                 });
 
-                        ui.add_space(50.0);
-
-                ui.vertical(|ui| {
-                    network_box(ui, accent, &sender_data, &receiver_data);
-                });
+                ui.add_space(30.0);
 
             });
         } else {
             ui.vertical_centered(|ui| {
+                ui.set_width(card_width);
                 file_info_box(ui, accent, data, &hash);
+
+                ui.add_space(20.0);
+
                 network_box(ui, accent, &sender_data, &receiver_data);
+
+                ui.add_space(20.0);
+
             });
         }
     });
 }
 
-fn file_info_box(ui: &mut Ui, accent: Color32, data: &FileMetadata, hash: &str) {
-    ui.set_min_width(260.0);
 
+fn file_info_box(ui: &mut Ui, accent: Color32, data: &FileMetadata, hash: &str) {
+    ui.add_space(8.0);
     ui.horizontal(|ui| {
         ui.label(
-            RichText::new("FILE INFORMATION")
+            RichText::new("> [FILE INFORMATION]")
                 .monospace()
                 .strong()
                 .color(accent),
@@ -959,12 +971,129 @@ fn file_info_box(ui: &mut Ui, accent: Color32, data: &FileMetadata, hash: &str) 
         .corner_radius(2.0);
 
     frame.show(ui, |ui| {
+        let value_width = ui.available_width() + 250.0;
+        let font_id = egui::TextStyle::Monospace.resolve(ui.style());
+
         terminal_kv(ui, "Name", &data.name);
-        terminal_kv(ui, "Path", &data.path);
+
+        {
+            let full = &data.path;
+            let mut display = full.to_string();
+
+            ui.fonts_mut(|fonts| {
+                let galley =
+                    fonts.layout_no_wrap(display.clone(), font_id.clone(), Color32::WHITE);
+
+                if galley.size().x > value_width {
+                    display = full.to_string();
+                    while !display.is_empty() {
+                        display.pop();
+                        let candidate = format!("{display}...");
+                        let galley = fonts.layout_no_wrap(
+                            candidate.clone(),
+                            font_id.clone(),
+                            Color32::WHITE,
+                        );
+                        if galley.size().x <= value_width {
+                            display = candidate;
+                            break;
+                        }
+                    }
+                }
+            });
+
+            ui.horizontal(|ui| {
+                 ui.label(
+            RichText::new("Path:")
+                .monospace()
+                .color(Color32::from_gray(150)),
+        );
+        ui.add_space(6.0);
+                ui.label(
+                    RichText::new(display).color(Color32::from_gray(220))
+                        .monospace()
+                ).on_hover_text(full);
+            });
+        }
+
         terminal_kv(ui, "Size", &data.size);
         terminal_kv(ui, "Type", &data.file_type);
-        terminal_kv(ui, "Hash", hash);
+
+        {
+            let full = hash;
+            let mut display = full.to_string();
+
+            ui.fonts_mut(|fonts| {
+                let galley =
+                    fonts.layout_no_wrap(display.clone(), font_id.clone(), Color32::WHITE);
+
+                if galley.size().x > value_width {
+                    display = full.to_string();
+                    while !display.is_empty() {
+                        display.pop();
+                        let candidate = format!("{display}...");
+                        let galley = fonts.layout_no_wrap(
+                            candidate.clone(),
+                            font_id.clone(),
+                            Color32::WHITE,
+                        );
+                        if galley.size().x <= value_width {
+                            display = candidate;
+                            break;
+                        }
+                    }
+                }
+            });
+
+            ui.horizontal(|ui| {
+                 ui.label(
+            RichText::new("Hash:")
+                .monospace()
+                .color(Color32::from_gray(150)),
+        );
+        ui.add_space(6.0);
+                ui.label(
+                    RichText::new(display).color(Color32::from_gray(220))
+                        .monospace()
+                ).on_hover_text(full);
+            });
+        }
+
         terminal_kv(ui, "Last Modified", &data.modified_date);
+    });
+}
+
+fn security_box(ui: &mut Ui, accent: Color32) {
+    ui.add_space(8.0);
+    ui.vertical(|ui| {
+        ui.set_min_width(260.0);
+        ui.set_max_width(360.0);
+
+        ui.label(
+            egui::RichText::new("> [SECURITY INFORMATION]")
+                .monospace()
+                .strong()
+                .color(accent),
+        );
+
+        ui.add_space(8.0);
+
+        let frame = egui::Frame::new()
+            .fill(Color32::from_rgb(25, 25, 30))
+            .stroke(Stroke::new(1.0, Color32::from_gray(70)))
+            .inner_margin(Margin::symmetric(10, 10))
+            .corner_radius(2.0);
+
+        frame.show(ui, |ui| {
+            ui.set_max_width(360.0);
+
+            terminal_kv(ui, "Key Exchange", "X25519");
+            terminal_kv(ui, "Key Derivation", "HKDF");
+            terminal_kv(ui, "Encryption", "ChaCha20-Poly1305");
+            terminal_kv(ui, "Forward Secrecy", "Yes");
+            terminal_kv(ui, "File Hash", "BLAKE3");
+            terminal_kv(ui, "Secret Code", "Base32");
+        });
     });
 }
 
@@ -974,10 +1103,9 @@ fn network_box(
     sender: &SenderNetworkInfo,
     receiver: &ReceiverNetworkInfo,
 ) {
-    ui.set_min_width(260.0);
-
+    ui.add_space(8.0);
     ui.horizontal(|ui| {
-        ui.label(RichText::new("NETWORK").monospace().strong().color(accent));
+        ui.label(RichText::new("> [NETWORK INFORMATION]").monospace().strong().color(accent));
     });
 
     ui.add_space(8.0);
@@ -1774,17 +1902,6 @@ fn receiver_card_single_box(
 
     outer_frame.show(ui, |ui| {
         ui.set_min_width(ui.available_width());
-
-        ui.horizontal(|ui| {
-            ui.colored_label(accent, "> ");
-            ui.label(
-                RichText::new("[OVERVIEW]")
-                    .color(accent)
-                    .monospace()
-                    .strong(),
-            );
-        });
-
         ui.add_space(15.0);
 
         let hash = if let Some(h) = file_hash.hash {
@@ -1793,50 +1910,67 @@ fn receiver_card_single_box(
             "Computing hash…".to_string()
         };
 
-        let available = ui.available_width();
+    let available = ui.available_width();
+    let card_width = 500.0;
+    let card_gap = 50.0;
+
 
         match metadata {
             Some(data) => {
-                if available >= 1920.0 {
+                if  available >= (card_width * 3.0 + card_gap * 2.0)  {
                     ui.horizontal_centered(|ui| {
                         ui.vertical(|ui| {
+                            ui.set_width(card_width);
                             file_info_box(ui, accent, data, &hash);
                         });
 
-                                ui.add_space(50.0);
+                                ui.add_space(card_gap);
 
 
                         if let (Some(sender), Some(receiver)) =
                             (sender_data.as_ref(), receiver_data.as_ref())
                         {
                             ui.vertical(|ui| {
+                                                            ui.set_width(card_width);
+
                                 receive_network_box(ui, accent, sender, receiver);
                             });
+
                         }
 
-                        ui.add_space(50.0);
+                         ui.vertical(|ui| {
+                ui.set_width(card_width);
+                security_box(ui, accent);
+            });
+
+                        ui.add_space(card_gap);
                     });
-                } else if available >= 1000.0 {
+                } else if available >= (card_width * 2.0 + card_gap)  {
                     ui.horizontal_centered(|ui| {
                         ui.vertical(|ui| {
+                                                        ui.set_width(card_width);
+
                             file_info_box(ui, accent, data, &hash);
                         });
 
-                            ui.add_space(50.0);
+                            ui.add_space(card_gap);
 
                         if let (Some(sender), Some(receiver)) =
                             (sender_data.as_ref(), receiver_data.as_ref())
                         {
                             ui.vertical(|ui| {
+                                                            ui.set_width(card_width);
+
                                 receive_network_box(ui, accent, sender, receiver);
                             });
                         }
                     });
                 } else {
                     ui.vertical_centered(|ui| {
+                        ui.set_width(card_width);
                         file_info_box(ui, accent, data, &hash);
 
-                        ui.add_space(50.0);
+                        ui.add_space(20.0);
 
                         if let (Some(sender), Some(receiver)) =
                             (sender_data.as_ref(), receiver_data.as_ref())
@@ -1844,7 +1978,7 @@ fn receiver_card_single_box(
                             receive_network_box(ui, accent, sender, receiver);
                         }
 
-                        ui.add_space(50.0);
+                        ui.add_space(20.0);
 
                     });
                 }
@@ -1870,7 +2004,7 @@ fn receive_network_box(
     ui.set_min_width(260.0);
 
     ui.horizontal(|ui| {
-        ui.label(RichText::new("NETWORK").monospace().strong().color(accent));
+        ui.label(RichText::new("> [NETWORK INFORMATION]").monospace().strong().color(accent));
     });
 
     ui.add_space(8.0);
