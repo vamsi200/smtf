@@ -1,12 +1,8 @@
-#![allow(unused)]
-
 use crate::state::FileMetadata;
 use anyhow::{Error, Result};
 use blake3::Hash;
-use log::{info, log};
 use std::fmt::Write;
-use std::net::{SocketAddr, ToSocketAddrs, UdpSocket};
-use std::time::{Duration, SystemTime};
+use std::net::{SocketAddr, UdpSocket};
 use std::{fs::File, io::Read, path::PathBuf};
 
 const UNITS: [&str; 7] = ["B", "KiB", "MiB", "GiB", "TiB", "PiB", "EiB"];

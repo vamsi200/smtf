@@ -1,8 +1,6 @@
-#![allow(unused)]
 use crate::{handshake::FatalExt, state::CondState};
 use anyhow::{Error, Result};
 use blake3::Hash;
-use log::info;
 use std::{
     fs::File,
     io::{Read, Seek, SeekFrom, Write},
@@ -17,7 +15,6 @@ use std::{
 use crate::{
     crypto::{decrypt_data, encrypt_data},
     handshake::{receive_nonce, send_nonce},
-    helper::PREHASH_LIMIT,
     state::{FileMetadata, ReceiverState, SenderEvent, TransferProgress, UiError},
 };
 
@@ -39,7 +36,7 @@ fn read_error(stream: &mut TcpStream) -> bool {
 }
 
 fn write_error(stream: &mut TcpStream) {
-    stream.write_all(&[MsgType::Error as u8]);
+    let _ = stream.write_all(&[MsgType::Error as u8]);
 }
 
 pub fn send_file(
@@ -61,12 +58,12 @@ pub fn send_file(
     let mut delta = 0usize;
     let mut result = Outcome::Completed;
     let mut stream_clone = stream.try_clone().unwrap();
-    let mut ev_tx_clone = ev_tx.clone();
+    let ev_tx_clone = ev_tx.clone();
 
     std::thread::spawn(move || {
         let s = read_error(&mut stream_clone);
         if s {
-            ev_tx_clone.send(SenderEvent::Error(UiError::ConnectionFailed)); // This context of error is fine, for now..
+            let _ = ev_tx_clone.send(SenderEvent::Error(UiError::ConnectionFailed)); // This context of error is fine, for now..
             return;
         }
     });
@@ -106,7 +103,7 @@ pub fn send_file(
             hasher.update(&buf[..n]);
             delta += n;
 
-            ev_tx.send(SenderEvent::Trasnfer(TransferProgress {
+            let _ = ev_tx.send(SenderEvent::Trasnfer(TransferProgress {
                 total: file_size,
                 sent: delta,
             }));
@@ -190,7 +187,7 @@ pub fn send_file(
 
             delta += n;
 
-            ev_tx.send(SenderEvent::Trasnfer(TransferProgress {
+            let _ = ev_tx.send(SenderEvent::Trasnfer(TransferProgress {
                 total: file_size,
                 sent: delta,
             }));
@@ -335,7 +332,7 @@ pub fn receive_file(
                 let decrypted = decrypt_data(buf, nonce, receiver_key);
                 delta += decrypted.len();
 
-                ev_tx.send(ReceiverState::ReceivedBytes(delta));
+                let _ = ev_tx.send(ReceiverState::ReceivedBytes(delta));
 
                 if file
                     .write_all(&decrypted)
@@ -444,12 +441,12 @@ pub fn send_hash(hash: Option<Hash>, stream: &mut TcpStream) -> Result<(), Error
     match hash {
         Some(hash) => {
             let hash_type_val = HashType::Some as u8;
-            stream.write_all(&[hash_type_val]);
+            let _ = stream.write_all(&[hash_type_val]);
             stream.write_all(hash.as_bytes())?;
         }
         None => {
             let hash_type_val = HashType::None as u8;
-            stream.write_all(&[hash_type_val]);
+            let _ = stream.write_all(&[hash_type_val]);
         }
     }
     Ok(())

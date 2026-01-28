@@ -1,9 +1,7 @@
-#![allow(unused)]
-
 use std::{
     net::SocketAddr,
     path::PathBuf,
-    sync::{atomic::AtomicBool, mpsc, Arc, Condvar, Mutex},
+    sync::{atomic::AtomicBool, Arc},
     thread::JoinHandle,
 };
 

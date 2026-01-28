@@ -1,42 +1,21 @@
-#![allow(dead_code)]
-#![allow(unused_variables)]
-#![allow(unused_imports)]
-
 use anyhow::{Error, Ok};
 use arboard::Clipboard;
-use eframe::{glow::NONE, Frame, NativeOptions};
-use egui::{Context, FontData, FontDefinitions, Grid, Stroke};
 use log::info;
-use rfd::FileDialog;
 use smtf::{
-    handshake::{self, *},
-    helper::{self, get_file_size, get_socket_addr},
+    handshake::{decode, receiver, sender},
     state::{
-        self, BackendState, Command, CondState, FileHash, FileMetadata, HandshakeData,
-        ReceiverState, ReceiverUiState, SenderEvent, UiError,
+        BackendState, Command, CondState, FileHash, ReceiverState, ReceiverUiState, SenderEvent,
+        UiError,
     },
-    transfer::send_file,
     ui::{self, AppState, PopupState},
 };
-use std::{
-    env::{self, Args},
-    fs::File,
-    io::{Read, Write},
-    net::{Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV6, TcpListener, TcpStream, UdpSocket},
-    path::PathBuf,
-    str::FromStr,
-    sync::{
-        atomic::{AtomicBool, Ordering},
-        mpsc::{self, Sender},
-        Arc, Mutex,
-    },
+use std::sync::Condvar;
+use std::sync::{
+    atomic::Ordering,
+    mpsc::{self},
+    Arc, Mutex,
 };
-use std::{
-    sync::Condvar,
-    time::{Duration, Instant},
-};
-use x25519_dalek::PublicKey;
-use zeroize::Zeroize;
+// use zeroize::Zeroize;
 
 fn main() -> Result<(), Error> {
     env_logger::init();

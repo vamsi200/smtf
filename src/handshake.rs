@@ -1,34 +1,19 @@
-#![allow(dead_code)]
-#![allow(unused)]
-
 use anyhow::{Error, Result};
 use chacha20poly1305::Nonce;
-use egui::text_selection::LabelSelectionState;
-use egui::{Order, Ui};
-use log::{error, info, log};
-use rand::RngCore;
+use log::{error, info};
 use rand::{rngs::OsRng, TryRngCore};
 use rfd::FileDialog;
 use sha2::{Digest, Sha256};
-use std::collections::btree_map;
-use std::env::Args;
 use std::fs::File;
 use std::io::{Read, Write};
-use std::net::{
-    Ipv6Addr, Shutdown, SocketAddr, SocketAddrV6, TcpListener, TcpStream, ToSocketAddrs, UdpSocket,
-};
-use std::path::{Path, PathBuf};
-use std::process::exit;
-use std::str::FromStr;
+use std::net::{Shutdown, SocketAddr, TcpListener, TcpStream, ToSocketAddrs};
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Condvar, Mutex};
-use std::thread::sleep;
-use std::time::Duration;
 use x25519_dalek::{EphemeralSecret, PublicKey, SharedSecret};
-use zeroize::Zeroize;
 
-use crate::crypto::{self, derive_session_keys, encrypt_data, Mode, SessionKeys};
+use crate::crypto::{derive_session_keys, Mode};
 
 pub struct HandShakeData {
     public_key: PublicKey,
@@ -114,7 +99,7 @@ pub fn encode(socket: SocketAddr) -> Result<HumanReadableTransferCode, Error> {
 // Receiver
 pub fn decode(encoded_data: &HumanReadableTransferCode) -> Option<TransferCode> {
     let raw = parse_transfer_code(encoded_data);
-    let mut s = base32::decode(base32::Alphabet::Crockford, &raw);
+    let s = base32::decode(base32::Alphabet::Crockford, &raw);
     let transfer_code = if let Some(s) = s {
         if s.len() < 16 {
             return None;
@@ -136,17 +121,15 @@ pub fn decode(encoded_data: &HumanReadableTransferCode) -> Option<TransferCode> 
     transfer_code
 }
 
-type Connection = (TcpStream, SocketAddr);
-
 use crate::helper::{get_file_hash, get_file_metadata, get_socket_addr, PREHASH_LIMIT};
 use crate::state::{
-    self, BackendState, CondState, FileHash, FileMetadata, HandshakeData, ReceiveHandShakeState,
-    ReceiverNetworkInfo, ReceiverState, ReceiverTask, ReceiverUiState, SenderEvent,
-    SenderHandShakeState, SenderNetworkInfo, Task, TransferProgress, UiError,
+    CondState, FileHash, HandshakeData, ReceiveHandShakeState, ReceiverNetworkInfo, ReceiverState,
+    ReceiverTask, ReceiverUiState, SenderEvent, SenderHandShakeState, SenderNetworkInfo, Task,
+    UiError,
 };
+
 use crate::transfer::{
-    self, receive_file, receive_hash, receive_metadata, send_file, send_file_metadata, send_hash,
-    Outcome,
+    receive_file, receive_hash, receive_metadata, send_file, send_file_metadata, send_hash, Outcome,
 };
 
 pub trait ErrorSink {
@@ -219,13 +202,13 @@ pub fn sender(
         port: socket_addr.port().to_string(),
     };
 
-    ev_tx.send(SenderEvent::SenderNetworkInfo(sender_network_info));
+    let _ = ev_tx.send(SenderEvent::SenderNetworkInfo(sender_network_info));
 
-    ev_tx.send(SenderEvent::HandshakeState(
+    let _ = ev_tx.send(SenderEvent::HandshakeState(
         SenderHandShakeState::Initialized,
     ));
 
-    ev_tx.send(SenderEvent::HandshakeState(
+    let _ = ev_tx.send(SenderEvent::HandshakeState(
         SenderHandShakeState::SecretDerived,
     ));
 
@@ -244,20 +227,20 @@ pub fn sender(
     let listener = TcpListener::bind(socket_addr)?;
     listener.set_nonblocking(true)?;
 
-    ev_tx.send(SenderEvent::FileData(file_metadata.clone()));
+    let _ = ev_tx.send(SenderEvent::FileData(file_metadata.clone()));
 
     let hash = if file_size > PREHASH_LIMIT {
-        ev_tx.send(SenderEvent::FileHash(FileHash { hash: None }));
+        let _ = ev_tx.send(SenderEvent::FileHash(FileHash { hash: None }));
         None
     } else {
         let h = get_file_hash(&mut file)?;
-        ev_tx.send(SenderEvent::FileHash(FileHash {
+        let _ = ev_tx.send(SenderEvent::FileHash(FileHash {
             hash: Some(h.clone()),
         }));
         Some(h)
     };
 
-    ev_tx.send(SenderEvent::HandshakeDerived(handshake_data));
+    let _ = ev_tx.send(SenderEvent::HandshakeDerived(handshake_data));
 
     let handle = std::thread::spawn(move || {
         loop {
@@ -272,9 +255,9 @@ pub fn sender(
                         port: addr.port().to_string(),
                     };
 
-                    ev_tx.send(SenderEvent::ReceiverNetworkInfo(receiver_network_info));
+                    let _ = ev_tx.send(SenderEvent::ReceiverNetworkInfo(receiver_network_info));
 
-                    ev_tx.send(SenderEvent::HandshakeState(
+                    let _ = ev_tx.send(SenderEvent::HandshakeState(
                         SenderHandShakeState::VerifyingSecret,
                     ));
 
@@ -285,7 +268,7 @@ pub fn sender(
                         break;
                     }
 
-                    ev_tx.send(SenderEvent::HandshakeState(
+                    let _ = ev_tx.send(SenderEvent::HandshakeState(
                         SenderHandShakeState::SecretVerified,
                     ));
 
@@ -298,7 +281,7 @@ pub fn sender(
                         break;
                     }
 
-                    ev_tx.send(SenderEvent::HandshakeState(
+                    let _ = ev_tx.send(SenderEvent::HandshakeState(
                         SenderHandShakeState::PublicKeySent,
                     ));
 
@@ -309,20 +292,20 @@ pub fn sender(
                         None => break,
                     };
 
-                    ev_tx.send(SenderEvent::HandshakeState(
+                    let _ = ev_tx.send(SenderEvent::HandshakeState(
                         SenderHandShakeState::PublicKeyReceived,
                     ));
 
                     let shared_secret = derive_shared_secret(state.private_key, peer_pk);
 
-                    ev_tx.send(SenderEvent::HandshakeState(
+                    let _ = ev_tx.send(SenderEvent::HandshakeState(
                         SenderHandShakeState::DeriveSharedSecret,
                     ));
 
                     let transcript =
                         derive_transcript(state.public_key, peer_pk, &transfer_code.secret);
 
-                    ev_tx.send(SenderEvent::HandshakeState(
+                    let _ = ev_tx.send(SenderEvent::HandshakeState(
                         SenderHandShakeState::DeriveTranscript,
                     ));
 
@@ -334,7 +317,7 @@ pub fn sender(
                             None => break,
                         };
 
-                    ev_tx.send(SenderEvent::HandshakeState(
+                    let _ = ev_tx.send(SenderEvent::HandshakeState(
                         SenderHandShakeState::HandshakeCompleted,
                     ));
 
@@ -361,7 +344,7 @@ pub fn sender(
 
                     match decision {
                         Decision::Accept => {
-                            ev_tx.send(SenderEvent::TransferStarted);
+                            let _ = ev_tx.send(SenderEvent::TransferStarted);
 
                             let (final_hash, outcome) = send_file(
                                 &mut file,
@@ -375,10 +358,10 @@ pub fn sender(
                             );
 
                             if matches!(outcome, Outcome::Completed) {
-                                ev_tx.send(SenderEvent::TransferCompleted);
+                                let _ = ev_tx.send(SenderEvent::TransferCompleted);
                                 if hash.is_none() {
                                     let _ = send_hash(Some(final_hash.clone()), &mut stream);
-                                    ev_tx.send(SenderEvent::FileHash(FileHash {
+                                    let _ = ev_tx.send(SenderEvent::FileHash(FileHash {
                                         hash: Some(final_hash),
                                     }));
                                 }
@@ -503,14 +486,14 @@ pub fn start_receiver(
         port: socket_addr.port().to_string(),
     };
 
-    cmd_tx.send(ReceiverState::SenderNetworkInfo(sender_info));
+    let _ = cmd_tx.send(ReceiverState::SenderNetworkInfo(sender_info));
 
-    cmd_tx.send(ReceiverState::Connecting);
+    let _ = cmd_tx.send(ReceiverState::Connecting);
 
     let mut stream =
         match TcpStream::connect(socket_addr).fatal(&cmd_tx, |_| UiError::ConnectionFailed) {
             Some(s) => {
-                cmd_tx.send(ReceiverState::Connected);
+                let _ = cmd_tx.send(ReceiverState::Connected);
                 s
             }
             None => return,
@@ -521,11 +504,11 @@ pub fn start_receiver(
         port: stream.local_addr().unwrap().port().to_string(),
     };
 
-    cmd_tx.send(ReceiverState::ReceiverNetworkInfo(receiver_info));
+    let _ = cmd_tx.send(ReceiverState::ReceiverNetworkInfo(receiver_info));
 
     info!("Connected to {socket_addr:?}");
 
-    cmd_tx.send(ReceiverState::HandshakeState(
+    let _ = cmd_tx.send(ReceiverState::HandshakeState(
         ReceiveHandShakeState::Initialized,
     ));
 
@@ -555,13 +538,13 @@ pub fn start_receiver(
         UiError::PublicKeySendFailed
     );
 
-    cmd_tx.send(ReceiverState::HandshakeState(
+    let _ = cmd_tx.send(ReceiverState::HandshakeState(
         ReceiveHandShakeState::PublicKeySent,
     ));
 
     let shared_secret = derive_shared_secret(state.private_key, peer_public_key);
 
-    cmd_tx.send(ReceiverState::HandshakeState(
+    let _ = cmd_tx.send(ReceiverState::HandshakeState(
         ReceiveHandShakeState::DeriveSharedSecret,
     ));
 
@@ -569,7 +552,7 @@ pub fn start_receiver(
 
     info!("Derived Transcript");
 
-    cmd_tx.send(ReceiverState::HandshakeState(
+    let _ = cmd_tx.send(ReceiverState::HandshakeState(
         ReceiveHandShakeState::DeriveTranscript,
     ));
 
@@ -580,7 +563,7 @@ pub fn start_receiver(
         None => return,
     };
 
-    cmd_tx.send(ReceiverState::HandshakeState(
+    let _ = cmd_tx.send(ReceiverState::HandshakeState(
         ReceiveHandShakeState::DeriveSessionKeys,
     ));
 
@@ -593,23 +576,23 @@ pub fn start_receiver(
     let hash = match receive_hash(&mut stream) {
         Ok(hash) => hash,
         Ok(None) => {
-            cmd_tx.send(ReceiverState::Error(UiError::HashReceiveFailed(Some(
+            let _ = cmd_tx.send(ReceiverState::Error(UiError::HashReceiveFailed(Some(
                 "Hash missing".into(),
             ))));
             return;
         }
         Err(e) => {
-            cmd_tx.send(ReceiverState::Error(UiError::HashReceiveFailed(Some(
+            let _ = cmd_tx.send(ReceiverState::Error(UiError::HashReceiveFailed(Some(
                 e.to_string(),
             ))));
             return;
         }
     };
 
-    cmd_tx.send(ReceiverState::FileHash(FileHash { hash }));
-    cmd_tx.send(ReceiverState::FileState(file_metadata.clone()));
+    let _ = cmd_tx.send(ReceiverState::FileHash(FileHash { hash }));
+    let _ = cmd_tx.send(ReceiverState::FileState(file_metadata.clone()));
 
-    ui_tx.send(ReceiverUiState::Confirming);
+    let _ = ui_tx.send(ReceiverUiState::Confirming);
 
     let file_name = file_metadata.name;
 
@@ -634,7 +617,7 @@ pub fn start_receiver(
                     UiError::DecisionSendFailed
                 );
 
-                ui_tx.send(ReceiverUiState::Receiving);
+                let _ = ui_tx.send(ReceiverUiState::Receiving);
 
                 let mut file =
                     match File::create(file_path).fatal(&cmd_tx, UiError::FileWriteFailed) {
@@ -652,7 +635,7 @@ pub fn start_receiver(
                     &cond_state,
                 ) {
                     if let Outcome::Completed = outcome {
-                        cmd_tx.send(ReceiverState::RecieveCompleted);
+                        let _ = cmd_tx.send(ReceiverState::RecieveCompleted);
                     }
                 }
             }
@@ -704,7 +687,7 @@ pub fn receiver(
     let pause = Arc::new(AtomicBool::new(false));
     let pause_clone = Arc::clone(&pause);
 
-    let mut cancel = Arc::new(AtomicBool::new(false));
+    let cancel = Arc::new(AtomicBool::new(false));
     let cancel_clone = cancel.clone();
     let handle = std::thread::spawn(move || {
         start_receiver(
@@ -728,6 +711,8 @@ pub fn receiver(
 
 #[cfg(test)]
 mod tests {
+    use zeroize::Zeroize;
+
     use super::*;
     use crate::crypto::{decrypt_data, encrypt_data};
     use std::net::{Ipv6Addr, SocketAddr, SocketAddrV6};
@@ -761,9 +746,9 @@ mod tests {
     fn test_shared_secret() {
         let sender_state = generate_key_state();
         let receiver_state = generate_key_state();
-        let mut sender_shared_secret =
+        let sender_shared_secret =
             derive_shared_secret(sender_state.private_key, receiver_state.public_key);
-        let mut receiver_shared_secret =
+        let receiver_shared_secret =
             derive_shared_secret(receiver_state.private_key, sender_state.public_key);
 
         assert_eq!(

@@ -1,25 +1,20 @@
-#![allow(unused)]
 use arboard::Clipboard;
-use blake3::Hash;
 use eframe::{NativeOptions, Renderer};
-use egui::{epaint::FontsView, *};
+use egui::*;
 use log::info;
 use rfd::FileDialog;
-use std::{
-    net::TcpListener,
-    sync::{
-        Arc, Condvar, Mutex, mpsc::{Receiver, Sender}
-    },
-    time::{Duration, Instant},
+use std::sync::{
+    mpsc::{Receiver, Sender},
+    Arc, Condvar, Mutex,
 };
 
 use crate::{
-    handshake::{Decision, decode, encode, sender},
-    helper::get_socket_addr,
+    handshake::Decision,
     state::{
-        Command, CondState, FileHash, FileMetadata, HandshakeData, ReceiveHandShakeState, ReceiverNetworkInfo, ReceiverUiState, SenderEvent, SenderHandShakeState, SenderNetworkInfo, TransferProgress, UiError
+        Command, CondState, FileHash, FileMetadata, HandshakeData, ReceiveHandShakeState,
+        ReceiverNetworkInfo, ReceiverUiState, SenderEvent, SenderHandShakeState, SenderNetworkInfo,
+        TransferProgress, UiError,
     },
-    transfer::Outcome,
 };
 
 pub struct AppState {
@@ -62,7 +57,6 @@ impl AppState {
         let mut mode = Mode::Idle;
         let mut receiver_secret = String::new();
         let mut cancel_confirm = CancelConfirm::default();
-        let expanded_id = egui::Id::new("receiver_secret_expanded");
 
         eframe::run_simple_native("SMTF", options, move |ctx, _frame| {
             ctx.request_repaint();
@@ -113,18 +107,13 @@ impl AppState {
                     }
 
                     Mode::Send => {
-                        let b = top_bar(
-                            ui,
-                            egui::Color32::from_rgb(100, 180, 255),
-                            &mut mode,
-                            &cmd_tx,
-                        );
+                        let b = top_bar(ui, egui::Color32::from_rgb(100, 180, 255));
 
                         if b {
                             cancel_confirm.open = true;
                         }
 
-                        generic_popup(ctx,&mut  self.popup_state, true);
+                        generic_popup(ctx, &mut self.popup_state, true);
 
                         cancel_transfer_popup_command_style(
                             ctx,
@@ -133,7 +122,7 @@ impl AppState {
                             &mut mode,
                             &cond_var,
                             || {
-                                cmd_tx.send(Command::Cancel);
+                                let _ = cmd_tx.send(Command::Cancel);
                             },
                         );
 
@@ -153,7 +142,7 @@ impl AppState {
                                         self.handshake_state = Some(hs)
                                     }
                                     SenderEvent::Trasnfer(tp) => self.transfer_progress = Some(tp),
-                                    SenderEvent::TransferStarted => {self.is_sending = true},
+                                    SenderEvent::TransferStarted => self.is_sending = true,
                                     SenderEvent::TransferCompleted => self.is_sent = true,
                                     SenderEvent::Error(ui_err) => {
                                         self.ui_error = Some(ui_err);
@@ -172,16 +161,15 @@ impl AppState {
                                 }
                             }
 
-
                             if let (Some(handshake_state), Some(hd)) =
                                 (&self.handshake_state, &self.handshake_data)
                             {
-                            let is_peer_connected = match handshake_state {
-                                SenderHandShakeState::VerifyingSecret => false,
-                                SenderHandShakeState::Initialized => false,
-                                SenderHandShakeState::SecretDerived => false,
-                                _ => true,
-                            };
+                                let is_peer_connected = match handshake_state {
+                                    SenderHandShakeState::VerifyingSecret => false,
+                                    SenderHandShakeState::Initialized => false,
+                                    SenderHandShakeState::SecretDerived => false,
+                                    _ => true,
+                                };
 
                                 sender_status_card(
                                     ui,
@@ -193,13 +181,11 @@ impl AppState {
                                     &mut self.is_expanded,
                                     is_peer_connected,
                                     &mut self.popup_state,
-                                    ctx
+                                    ctx,
                                 );
                             }
 
-                            if let (Some(metadata), (hash), Some(handshake_state)) =
-                                (&self.file_metadata, &self.file_hash, &self.handshake_state)
-                            {
+                            if let (Some(metadata), hash) = (&self.file_metadata, &self.file_hash) {
                                 sender_card_single_box(
                                     ui,
                                     metadata,
@@ -215,42 +201,46 @@ impl AppState {
 
                             completion_popup(ctx, self.is_sent, &mut mode, true);
                             error_popup(ctx, &mut self.ui_error, &mut mode, &cond_var);
-                            receiver_cancelled_popup(ctx, &mut self.is_transfer_cancelled, &mut mode);
-
+                            receiver_cancelled_popup(
+                                ctx,
+                                &mut self.is_transfer_cancelled,
+                                &mut mode,
+                            );
                         });
                     }
 
                     Mode::Receive => {
-                        let b = top_bar(
-                            ui,
-                            egui::Color32::from_rgb(180, 100, 255),
-                            &mut mode,
-                            &cmd_tx,
-                        );
+                        let b = top_bar(ui, egui::Color32::from_rgb(180, 100, 255));
                         if b {
                             cancel_confirm.open = true;
                         }
 
-                        generic_popup(ctx,&mut  self.popup_state, false);
+                        generic_popup(ctx, &mut self.popup_state, false);
 
                         cancel_transfer_popup_command_style(
                             ctx,
                             &mut cancel_confirm,
                             false,
                             &mut mode,
-                        &cond_var,
+                            &cond_var,
                             || {
-                                cmd_tx.send(Command::Cancel);
+                                let _ = cmd_tx.send(Command::Cancel);
                             },
                         );
 
                         while let Ok(ev) = rec_rx.try_recv() {
                             match ev {
                                 ReceiverState::Connecting => {
-                                        self.popup_state = PopupState { popup: Some(PopupKind::Connecting), popup_since: ctx.input(|x|x.time) };
+                                    self.popup_state = PopupState {
+                                        popup: Some(PopupKind::Connecting),
+                                        popup_since: ctx.input(|x| x.time),
+                                    };
                                 }
                                 ReceiverState::Connected => {
-                                    self.popup_state = PopupState { popup: Some(PopupKind::Connected), popup_since: ctx.input(|x|x.time) };
+                                    self.popup_state = PopupState {
+                                        popup: Some(PopupKind::Connected),
+                                        popup_since: ctx.input(|x| x.time),
+                                    };
                                 }
                                 ReceiverState::FileState(meta) => {
                                     self.file_metadata = Some(meta);
@@ -265,7 +255,6 @@ impl AppState {
                                     self.received_handshake_state = Some(hs);
                                 }
                                 ReceiverState::ReceivedBytes(bytes) => {
-
                                     if let Some(meta) = &self.file_metadata {
                                         let tp = TransferProgress {
                                             sent: bytes,
@@ -325,7 +314,6 @@ impl AppState {
                                 match *state {
                                     ReceiverUiState::Confirming => {
                                         receive_file_popup(
-                                            ui,
                                             &self.file_metadata,
                                             &self.file_hash,
                                             ctx,
@@ -336,13 +324,10 @@ impl AppState {
                                     ReceiverUiState::Receiving => {
                                         receiver_card_single_box(
                                             ui,
-                                            &mut receiver_secret,
-                                            &cmd_tx,
                                             &self.file_metadata,
                                             &self.file_hash,
                                             self.sender_network_info.clone(),
                                             self.receiver_network_info.clone(),
-                                            ctx,
                                         );
 
                                         if let Some(tp) = &self.transfer_progress {
@@ -387,20 +372,21 @@ pub fn generic_popup(ctx: &egui::Context, ui_state: &mut PopupState, is_sender: 
     let elapsed = ctx.input(|i| i.time) - ui_state.popup_since;
 
     if elapsed > 1.0 {
-        ui_state.popup = None;  
+        ui_state.popup = None;
         return;
     }
 
     let text = match kind {
         PopupKind::Connecting => "> trying to connect",
-        PopupKind::Connected  => "> successfully connected",
-        PopupKind::Copied     => "> successfully copied",
+        PopupKind::Connected => "> successfully connected",
+        PopupKind::Copied => "> successfully copied",
     };
 
     let accent = if is_sender {
-            Color32::from_rgb(100, 180, 255)
-
-    } else {Color32::from_rgb(180, 100, 255)};
+        Color32::from_rgb(100, 180, 255)
+    } else {
+        Color32::from_rgb(180, 100, 255)
+    };
 
     egui::Area::new(Id::new("connection_popup"))
         .anchor(egui::Align2::RIGHT_BOTTOM, egui::vec2(-16.0, -16.0))
@@ -413,11 +399,7 @@ pub fn generic_popup(ctx: &egui::Context, ui_state: &mut PopupState, is_sender: 
                 .corner_radius(egui::CornerRadius::same(2))
                 .inner_margin(egui::Margin::same(10))
                 .show(ui, |ui| {
-                    ui.label(
-                        egui::RichText::new(text)
-                            .monospace()
-                            .color(accent),
-                    );
+                    ui.label(egui::RichText::new(text).monospace().color(accent));
                 });
         });
 }
@@ -528,12 +510,6 @@ enum Mode {
     Receive,
 }
 
-fn grid_row(ui: &mut Ui, key: &str, val: &str) {
-    ui.label(RichText::new(key).color(Color32::from_gray(150)));
-    ui.label(RichText::new(val).color(Color32::from_gray(220)));
-    ui.end_row();
-}
-
 fn action_button_compact(ui: &mut Ui, label: &str, accent: Color32) -> Response {
     ui.add(
         Button::new(RichText::new(label).color(Color32::BLACK).strong())
@@ -541,115 +517,6 @@ fn action_button_compact(ui: &mut Ui, label: &str, accent: Color32) -> Response 
             .corner_radius(CornerRadius::same(6))
             .min_size(vec2(140.0, 36.0)),
     )
-}
-
-fn mini_action_button(ui: &mut Ui, icon: &str, tooltip: &str) -> Response {
-    ui.add(
-        Button::new(icon)
-            .corner_radius(CornerRadius::same(6))
-            .min_size(vec2(32.0, 32.0)),
-    )
-    .on_hover_text(tooltip)
-}
-
-fn timeline_step(ui: &mut egui::Ui, active: bool, label: &str, accent: egui::Color32) {
-    let bg = if active {
-        accent
-    } else {
-        egui::Color32::from_gray(55)
-    };
-
-    let text_color = if active {
-        egui::Color32::BLACK
-    } else {
-        egui::Color32::from_gray(170)
-    };
-
-    let font_id = egui::FontId::proportional(11.0);
-    let text = label.to_owned();
-
-    let galley = ui.painter().layout_no_wrap(
-        label.to_owned(),
-        egui::FontId::proportional(11.0),
-        text_color,
-    );
-
-    let padding = egui::vec2(10.0, 6.0);
-    let size = galley.size() + padding * 2.0;
-
-    let (rect, _) = ui.allocate_exact_size(size, egui::Sense::hover());
-
-    ui.painter()
-        .rect_filled(rect, egui::CornerRadius::same(6), bg);
-
-    ui.painter().text(
-        rect.center(),
-        egui::Align2::CENTER_CENTER,
-        label,
-        font_id,
-        text_color,
-    );
-}
-
-fn timeline_connector(ui: &mut egui::Ui, active: bool) {
-    let color = if active {
-        egui::Color32::from_rgb(120, 190, 255)
-    } else {
-        egui::Color32::from_gray(70)
-    };
-
-    let size = egui::vec2(20.0, 3.0);
-    let (rect, _) = ui.allocate_exact_size(size, egui::Sense::hover());
-
-    ui.painter()
-        .rect_filled(rect, egui::CornerRadius::same(2), color);
-}
-
-fn full_width_box(ui: &mut Ui, title: &str, accent: Color32, content: impl FnOnce(&mut Ui)) {
-    egui::Frame::new()
-        .fill(Color32::from_rgb(18, 18, 24))
-        .stroke(Stroke::new(1.0, Color32::from_rgb(40, 40, 50)))
-        .corner_radius(CornerRadius::same(10))
-        .inner_margin(Margin::same(16))
-        .show(ui, |ui| {
-            ui.set_width(ui.available_width());
-            ui.label(RichText::new(title).size(14.0).color(accent).strong());
-            ui.add_space(12.0);
-            content(ui);
-        });
-}
-
-fn section_box(ui: &mut Ui, title: &str, accent: Color32, add: impl FnOnce(&mut Ui)) {
-    egui::Frame::group(ui.style())
-        .fill(Color32::from_rgb(14, 14, 20))
-        .stroke(Stroke::new(1.0, Color32::from_rgb(35, 35, 45)))
-        .corner_radius(CornerRadius::same(8))
-        .inner_margin(Margin::same(12))
-        .show(ui, |ui| {
-            ui.label(RichText::new(title).size(12.0).color(accent).strong());
-            ui.add_space(8.0);
-            add(ui);
-        });
-}
-
-fn render_step(
-    ui: &mut egui::Ui,
-    current: &SenderHandShakeState,
-    step: &SenderHandShakeState,
-    label: &str,
-    accent: Color32,
-) {
-    let completed = current >= step;
-    timeline_step(ui, completed, label, accent);
-}
-
-fn render_connector(
-    ui: &mut egui::Ui,
-    current: &SenderHandShakeState,
-    next: &SenderHandShakeState,
-) {
-    let completed = current >= next;
-    timeline_connector(ui, completed);
 }
 
 #[derive(PartialEq)]
@@ -669,7 +536,7 @@ fn sender_status_card(
     is_expanded: &mut bool,
     is_peer_connected: bool,
     is_copied: &mut PopupState,
-    ctx: &Context
+    ctx: &Context,
 ) {
     let accent = Color32::from_rgb(100, 180, 255);
     let expanded_id = egui::Id::new("transfer_secret_expanded");
@@ -775,9 +642,8 @@ fn sender_status_card(
         ui.add_space(10.0);
         ui.separator();
         ui.add_space(10.0);
-        const SECRET_PANEL_WIDTH: f32 = 360.0;
 
-        if is_peer_connected{ 
+        if is_peer_connected {
             *is_expanded = false;
         }
 
@@ -841,8 +707,10 @@ fn sender_status_card(
                         |ui| {
                             if action_button_compact(ui, "Copy", accent).clicked() {
                                 if let Ok(_) = clipboard.set_text(secret_code) {
-                                    *is_copied = PopupState { popup: Some(PopupKind::Copied), popup_since: ctx.input(|x|x.time) };
-
+                                    *is_copied = PopupState {
+                                        popup: Some(PopupKind::Copied),
+                                        popup_since: ctx.input(|x| x.time),
+                                    };
                                 }
                             }
                         },
@@ -889,33 +757,33 @@ fn sender_card_single_box(
         .corner_radius(1.0);
 
     outer_frame.show(ui, |ui| {
-          let full_width = ui.available_width();
-    ui.set_width(full_width);
+        let full_width = ui.available_width();
+        ui.set_width(full_width);
 
-    let available = ui.available_width();
-    let card_width = 500.0;
-    let card_gap = 50.0;
+        let available = ui.available_width();
+        let card_width = 500.0;
+        let card_gap = 50.0;
 
-    if available >= (card_width * 3.0 + card_gap * 2.0) {
-        ui.horizontal_centered(|ui| {
-            ui.vertical(|ui| {
-                ui.set_width(card_width);
-                file_info_box(ui, accent, data, &hash);
+        if available >= (card_width * 3.0 + card_gap * 2.0) {
+            ui.horizontal_centered(|ui| {
+                ui.vertical(|ui| {
+                    ui.set_width(card_width);
+                    file_info_box(ui, accent, data, &hash);
+                });
+
+                ui.add_space(card_gap);
+
+                ui.vertical(|ui| {
+                    ui.set_width(card_width);
+                    network_box(ui, accent, &sender_data, &receiver_data);
+                });
+
+                ui.vertical(|ui| {
+                    ui.set_width(card_width);
+                    security_box(ui, accent);
+                });
             });
-
-            ui.add_space(card_gap);
-
-            ui.vertical(|ui| {
-                ui.set_width(card_width);
-                network_box(ui, accent, &sender_data, &receiver_data);
-            });
-
-              ui.vertical(|ui| {
-                ui.set_width(card_width);
-                security_box(ui, accent);
-            });
-        });
-    } else if available >= (card_width * 2.0 + card_gap) {
+        } else if available >= (card_width * 2.0 + card_gap) {
             ui.vertical_centered(|ui| {
                 ui.horizontal(|ui| {
                     ui.vertical(|ui| {
@@ -932,7 +800,6 @@ fn sender_card_single_box(
                 });
 
                 ui.add_space(30.0);
-
             });
         } else {
             ui.vertical_centered(|ui| {
@@ -944,12 +811,10 @@ fn sender_card_single_box(
                 network_box(ui, accent, &sender_data, &receiver_data);
 
                 ui.add_space(20.0);
-
             });
         }
     });
 }
-
 
 fn file_info_box(ui: &mut Ui, accent: Color32, data: &FileMetadata, hash: &str) {
     ui.add_space(8.0);
@@ -981,8 +846,7 @@ fn file_info_box(ui: &mut Ui, accent: Color32, data: &FileMetadata, hash: &str) 
             let mut display = full.to_string();
 
             ui.fonts_mut(|fonts| {
-                let galley =
-                    fonts.layout_no_wrap(display.clone(), font_id.clone(), Color32::WHITE);
+                let galley = fonts.layout_no_wrap(display.clone(), font_id.clone(), Color32::WHITE);
 
                 if galley.size().x > value_width {
                     display = full.to_string();
@@ -1003,16 +867,18 @@ fn file_info_box(ui: &mut Ui, accent: Color32, data: &FileMetadata, hash: &str) 
             });
 
             ui.horizontal(|ui| {
-                 ui.label(
-            RichText::new("Path:")
-                .monospace()
-                .color(Color32::from_gray(150)),
-        );
-        ui.add_space(6.0);
                 ui.label(
-                    RichText::new(display).color(Color32::from_gray(220))
+                    RichText::new("Path:")
                         .monospace()
-                ).on_hover_text(full);
+                        .color(Color32::from_gray(150)),
+                );
+                ui.add_space(6.0);
+                ui.label(
+                    RichText::new(display)
+                        .color(Color32::from_gray(220))
+                        .monospace(),
+                )
+                .on_hover_text(full);
             });
         }
 
@@ -1024,8 +890,7 @@ fn file_info_box(ui: &mut Ui, accent: Color32, data: &FileMetadata, hash: &str) 
             let mut display = full.to_string();
 
             ui.fonts_mut(|fonts| {
-                let galley =
-                    fonts.layout_no_wrap(display.clone(), font_id.clone(), Color32::WHITE);
+                let galley = fonts.layout_no_wrap(display.clone(), font_id.clone(), Color32::WHITE);
 
                 if galley.size().x > value_width {
                     display = full.to_string();
@@ -1046,16 +911,18 @@ fn file_info_box(ui: &mut Ui, accent: Color32, data: &FileMetadata, hash: &str) 
             });
 
             ui.horizontal(|ui| {
-                 ui.label(
-            RichText::new("Hash:")
-                .monospace()
-                .color(Color32::from_gray(150)),
-        );
-        ui.add_space(6.0);
                 ui.label(
-                    RichText::new(display).color(Color32::from_gray(220))
+                    RichText::new("Hash:")
                         .monospace()
-                ).on_hover_text(full);
+                        .color(Color32::from_gray(150)),
+                );
+                ui.add_space(6.0);
+                ui.label(
+                    RichText::new(display)
+                        .color(Color32::from_gray(220))
+                        .monospace(),
+                )
+                .on_hover_text(full);
             });
         }
 
@@ -1105,7 +972,12 @@ fn network_box(
 ) {
     ui.add_space(8.0);
     ui.horizontal(|ui| {
-        ui.label(RichText::new("> [NETWORK INFORMATION]").monospace().strong().color(accent));
+        ui.label(
+            RichText::new("> [NETWORK INFORMATION]")
+                .monospace()
+                .strong()
+                .color(accent),
+        );
     });
 
     ui.add_space(8.0);
@@ -1124,16 +996,6 @@ fn network_box(
         terminal_kv(ui, "Transport", "TCP");
         terminal_kv(ui, "Role", "Sender");
     });
-}
-
-fn grid_row_cmd(ui: &mut Ui, key: &str, value: &str) {
-    ui.label(
-        egui::RichText::new(format!("{key}:"))
-            .monospace()
-            .color(Color32::from_gray(160)),
-    );
-    ui.label(egui::RichText::new(value).monospace());
-    ui.end_row();
 }
 
 fn progress_bar(
@@ -1429,7 +1291,6 @@ fn cancel_transfer_popup_command_style(
                     confirm.open = false;
                     on_confirm_cancel();
                     *mode = Mode::Idle;
-
                 }
             });
 
@@ -1442,7 +1303,6 @@ fn cancel_transfer_popup_command_style(
 use crate::state::ReceiverState;
 
 fn receive_file_popup(
-    ui: &mut Ui,
     metadata: &Option<FileMetadata>,
     file_hash: &FileHash,
     ctx: &Context,
@@ -1674,26 +1534,6 @@ fn terminal_grid_row(ui: &mut egui::Ui, label: &str, value: &str) {
     ui.end_row();
 }
 
-fn render_receive_step(
-    ui: &mut egui::Ui,
-    current: &ReceiveHandShakeState,
-    step: &ReceiveHandShakeState,
-    label: &str,
-    accent: Color32,
-) {
-    let completed = current >= step;
-    timeline_step(ui, completed, label, accent);
-}
-
-fn render_receive_connector(
-    ui: &mut egui::Ui,
-    current: &ReceiveHandShakeState,
-    next: &ReceiveHandShakeState,
-) {
-    let completed = current >= next;
-    timeline_connector(ui, completed);
-}
-
 fn initial_receive_card(
     ui: &mut Ui,
     secret: &mut String,
@@ -1850,7 +1690,7 @@ fn initial_receive_card(
                 ui.add(
                     TextEdit::singleline(secret)
                         .font(FontId::monospace(18.0))
-                        .desired_width(ui.available_width()) 
+                        .desired_width(ui.available_width())
                         .interactive(true)
                         .hint_text(
                             "XXXX-XXXX-XXXX-XXXX-XXXX-XXXX-XXXX-XXXX-XXXX-XXXX-XXXX-XXXX-XXXX-XXXX-XXXX",
@@ -1884,13 +1724,10 @@ fn initial_receive_card(
 
 fn receiver_card_single_box(
     ui: &mut Ui,
-    save_location: &mut String,
-    cmd_tx: &Sender<Command>,
     metadata: &Option<FileMetadata>,
     file_hash: &FileHash,
     sender_data: Option<SenderNetworkInfo>,
     receiver_data: Option<ReceiverNetworkInfo>,
-    ctx: &Context,
 ) {
     let accent = Color32::from_rgb(180, 100, 255);
 
@@ -1910,56 +1747,53 @@ fn receiver_card_single_box(
             "Computing hash…".to_string()
         };
 
-    let available = ui.available_width();
-    let card_width = 500.0;
-    let card_gap = 50.0;
-
+        let available = ui.available_width();
+        let card_width = 500.0;
+        let card_gap = 50.0;
 
         match metadata {
             Some(data) => {
-                if  available >= (card_width * 3.0 + card_gap * 2.0)  {
+                if available >= (card_width * 3.0 + card_gap * 2.0) {
                     ui.horizontal_centered(|ui| {
                         ui.vertical(|ui| {
                             ui.set_width(card_width);
                             file_info_box(ui, accent, data, &hash);
                         });
 
-                                ui.add_space(card_gap);
-
+                        ui.add_space(card_gap);
 
                         if let (Some(sender), Some(receiver)) =
                             (sender_data.as_ref(), receiver_data.as_ref())
                         {
                             ui.vertical(|ui| {
-                                                            ui.set_width(card_width);
+                                ui.set_width(card_width);
 
                                 receive_network_box(ui, accent, sender, receiver);
                             });
-
                         }
 
-                         ui.vertical(|ui| {
-                ui.set_width(card_width);
-                security_box(ui, accent);
-            });
+                        ui.vertical(|ui| {
+                            ui.set_width(card_width);
+                            security_box(ui, accent);
+                        });
 
                         ui.add_space(card_gap);
                     });
-                } else if available >= (card_width * 2.0 + card_gap)  {
+                } else if available >= (card_width * 2.0 + card_gap) {
                     ui.horizontal_centered(|ui| {
                         ui.vertical(|ui| {
-                                                        ui.set_width(card_width);
+                            ui.set_width(card_width);
 
                             file_info_box(ui, accent, data, &hash);
                         });
 
-                            ui.add_space(card_gap);
+                        ui.add_space(card_gap);
 
                         if let (Some(sender), Some(receiver)) =
                             (sender_data.as_ref(), receiver_data.as_ref())
                         {
                             ui.vertical(|ui| {
-                                                            ui.set_width(card_width);
+                                ui.set_width(card_width);
 
                                 receive_network_box(ui, accent, sender, receiver);
                             });
@@ -1979,7 +1813,6 @@ fn receiver_card_single_box(
                         }
 
                         ui.add_space(20.0);
-
                     });
                 }
             }
@@ -2004,7 +1837,12 @@ fn receive_network_box(
     ui.set_min_width(260.0);
 
     ui.horizontal(|ui| {
-        ui.label(RichText::new("> [NETWORK INFORMATION]").monospace().strong().color(accent));
+        ui.label(
+            RichText::new("> [NETWORK INFORMATION]")
+                .monospace()
+                .strong()
+                .color(accent),
+        );
     });
 
     ui.add_space(8.0);
@@ -2041,7 +1879,12 @@ fn terminal_kv(ui: &mut Ui, key: &str, value: &str) {
     });
 }
 
-fn error_popup(ctx: &egui::Context, error: &mut Option<UiError>, mode: &mut Mode, condvar: &Arc<(Mutex<CondState>, Condvar)>) {
+fn error_popup(
+    ctx: &egui::Context,
+    error: &mut Option<UiError>,
+    mode: &mut Mode,
+    condvar: &Arc<(Mutex<CondState>, Condvar)>,
+) {
     let Some(err) = error else { return };
     let err = err.clone();
 
@@ -2138,12 +1981,7 @@ fn error_popup(ctx: &egui::Context, error: &mut Option<UiError>, mode: &mut Mode
     }
 }
 
-fn top_bar(
-    ui: &mut egui::Ui,
-    color: egui::Color32,
-    mode: &mut Mode,
-    cmd_tx: &Sender<Command>,
-) -> bool {
+fn top_bar(ui: &mut egui::Ui, color: egui::Color32) -> bool {
     let mut home_button_clicked = false;
 
     egui::Frame::new().show(ui, |ui| {
@@ -2235,11 +2073,7 @@ fn mode_selection_card(ui: &mut egui::Ui, mode: &mut Mode, cmd_tx: &Sender<Comma
         });
 }
 
-fn receiver_cancelled_popup(
-    ctx: &egui::Context,
-    is_declined: &mut bool,
-    mode: &mut Mode,
-) {
+fn receiver_cancelled_popup(ctx: &egui::Context, is_declined: &mut bool, mode: &mut Mode) {
     if !*is_declined {
         return;
     }
@@ -2278,11 +2112,9 @@ fn receiver_cancelled_popup(
             ui.add_space(15.0);
 
             ui.label(
-                egui::RichText::new(
-                    "The receiver has cancelled the file transfer.",
-                )
-                .monospace()
-                .color(egui::Color32::from_gray(220)),
+                egui::RichText::new("The receiver has cancelled the file transfer.")
+                    .monospace()
+                    .color(egui::Color32::from_gray(220)),
             );
 
             ui.add_space(20.0);
@@ -2313,26 +2145,6 @@ fn receiver_cancelled_popup(
         *is_declined = false;
         *mode = Mode::Idle;
     }
-}
-
-
-fn hash_display(ui: &mut egui::Ui, hash: &str, _: egui::Color32) {
-    ui.horizontal(|ui| {
-        egui::Frame::new()
-            .fill(egui::Color32::from_rgb(12, 12, 18))
-            .stroke(egui::Stroke::new(1.0, egui::Color32::from_rgb(30, 30, 40)))
-            .corner_radius(CornerRadius::same(4))
-            .inner_margin(egui::Margin::same(8))
-            .show(ui, |ui| {
-                ui.label(
-                    egui::RichText::new(hash)
-                        .size(9.0)
-                        .color(egui::Color32::from_rgb(160, 160, 180))
-                        .monospace(),
-                );
-            });
-        mini_action_button(ui, "📋", "Copy");
-    });
 }
 
 fn gradient_button(

@@ -1,12 +1,10 @@
-#![allow(unused)]
 use anyhow::{Error, Result};
 use chacha20poly1305::{
     aead::{Aead, AeadCore, KeyInit, OsRng},
     ChaCha20Poly1305, Key, Nonce,
 };
-use hex;
 use hkdf::Hkdf;
-use sha2::{Digest, Sha256};
+use sha2::Sha256;
 use x25519_dalek::SharedSecret;
 
 #[derive(Clone, Debug)]
