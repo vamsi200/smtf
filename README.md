@@ -1,52 +1,15 @@
-# SMTF – Send Me The File
+# SMTF – Send Me The File (yes, thats the name)
 
 SMTF is a secure, peer-to-peer file transfer system over TCP designed with minimal trust assumptions and no central servers. It emphasizes direct connectivity, modern cryptography, and robust protocol design for safe and reliable file transfers between peers.
 
 > Note: This Tool expects the sender to be publicly available.
 
-## Features
-
-### 1. Architecture
-
-Pure peer-to-peer file transfer over TCP.
-
-- No central servers
-- No brokers or relays
-- Direct connectivity between peers
-- Minimal trust assumptions
-
-
-### 2. Session Security
-
-Ephemeral secrets are generated per transfer session.
-
-- Secure OS randomness
-- No long-term shared secrets
-- Reduced replay and key-compromise risk
-
-
-### 3. Data Protection
-
-End-to-end encryption using ChaCha20-Poly1305.
-
-Encryption is performed in fixed-size chunks to enable:
-
-- Large file support
-- Partial transfer recovery
-- Per-chunk integrity and authentication
-
-### 4. Key Exchange and Forward Secrecy
-
-Per-session encryption keys are derived using:
-
-- X25519 Diffie-Hellman key exchange
-- HKDF-based key derivation
-
-This ensures:
-
-- Forward secrecy
-- Cryptographic isolation between transfers
-- No key reuse across sessions
+| Feature | Description |
+|-------|-------------|
+| **Architecture** | Pure peer-to-peer file transfer over TCP with no central servers, brokers, or relays. Peers connect directly.|
+| **Session Security** | Ephemeral secrets are generated per transfer session using secure OS randomness. No long-term shared secrets, reducing replay and key-compromise risk. |
+| **Data Protection** | End-to-end encryption using ChaCha20-Poly1305. Data is encrypted in fixed-size chunks to support large files, partial transfer recovery, and per-chunk integrity and authentication. |
+| **Key Exchange & Forward Secrecy** | Per-session encryption keys derived using X25519 Diffie-Hellman and HKDF. Ensures forward secrecy, cryptographic isolation between transfers, and no key reuse across sessions. |
 
 
 
@@ -143,8 +106,3 @@ This ensures:
 - All cryptographic material is ephemeral and scoped to a single session.
 - No plaintext file data is transmitted over the network.
 - Each transfer is isolated to prevent key reuse or cross-session compromise.
-
-
-## Disclaimer
-
-This project is intended for educational and experimental purposes. It has not been independently audited. Use at your own risk.
