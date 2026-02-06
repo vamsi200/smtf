@@ -104,5 +104,5 @@ SMTF is a secure, peer-to-peer file transfer system over TCP designed with minim
 ## Security Notes
 
 - All cryptographic material is ephemeral and scoped to a single session.
-- No plaintext file data is transmitted over the network.
+- No plaintext file data is transmitted over the network (except the file information at the start of send, which I will change).
 - Each transfer is isolated to prevent key reuse or cross-session compromise.
