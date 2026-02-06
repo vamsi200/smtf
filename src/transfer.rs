@@ -29,10 +29,7 @@ enum MsgType {
 fn read_error(stream: &mut TcpStream) -> bool {
     let mut buf = [0u8; 1];
     let _ = stream.read_exact(&mut buf);
-    match buf[0] {
-        3 => true,
-        _ => false,
-    }
+    matches!(buf[0], 3)
 }
 
 fn write_error(stream: &mut TcpStream) {
@@ -63,8 +60,8 @@ pub fn send_file(
     std::thread::spawn(move || {
         let s = read_error(&mut stream_clone);
         if s {
-            let _ = ev_tx_clone.send(SenderEvent::Error(UiError::ConnectionFailed)); // This context of error is fine, for now..
-            return;
+            let _ = ev_tx_clone.send(SenderEvent::Error(UiError::ConnectionFailed));
+            // This context of error is fine, for now..
         }
     });
 
@@ -90,7 +87,7 @@ pub fn send_file(
             if n == 0 {
                 if stream
                     .write_all(&[MsgType::Eof as u8])
-                    .fatal(&ev_tx, |m| UiError::TransferFailed(m))
+                    .fatal(&ev_tx, UiError::TransferFailed)
                     .is_none()
                 {
                     result = Outcome::Error;
@@ -112,7 +109,7 @@ pub fn send_file(
 
             if stream
                 .write_all(&[MsgType::Data as u8])
-                .fatal(&ev_tx, |m| UiError::TransferFailed(m))
+                .fatal(&ev_tx, UiError::TransferFailed)
                 .is_none()
             {
                 result = Outcome::Error;
@@ -121,7 +118,7 @@ pub fn send_file(
             }
 
             if send_nonce(stream, nonce)
-                .fatal(&ev_tx, |m| UiError::NonceSendFailed(m))
+                .fatal(&ev_tx, UiError::NonceSendFailed)
                 .is_none()
             {
                 result = Outcome::Error;
@@ -132,7 +129,7 @@ pub fn send_file(
             let len = encrypted_chunks.len() as u32;
             if stream
                 .write_all(&len.to_be_bytes())
-                .fatal(&ev_tx, |m| UiError::TransferFailed(m))
+                .fatal(&ev_tx, UiError::TransferFailed)
                 .is_none()
             {
                 result = Outcome::Error;
@@ -142,7 +139,7 @@ pub fn send_file(
 
             if stream
                 .write_all(&encrypted_chunks)
-                .fatal(&ev_tx, |m| UiError::TransferFailed(m))
+                .fatal(&ev_tx, UiError::TransferFailed)
                 .is_none()
             {
                 result = Outcome::Error;
@@ -151,14 +148,10 @@ pub fn send_file(
             }
         }
     } else {
-        loop {
-            let n = match file
-                .read(&mut buf)
-                .fatal(&ev_tx, |m| UiError::TransferFailed(m))
-            {
-                Some(n) => n,
-                None => break,
-            };
+        while let Some(n) = file.read(&mut buf).fatal(&ev_tx, UiError::TransferFailed) {
+            if n == 0 {
+                break;
+            }
 
             if is_pause.load(Ordering::Relaxed) {
                 let (lock, condvar) = &**state;
@@ -176,7 +169,7 @@ pub fn send_file(
             if n == 0 {
                 if stream
                     .write_all(&[MsgType::Eof as u8])
-                    .fatal(&ev_tx, |m| UiError::TransferFailed(m))
+                    .fatal(&ev_tx, UiError::TransferFailed)
                     .is_none()
                 {
                     result = Outcome::Error;
@@ -196,7 +189,7 @@ pub fn send_file(
 
             if stream
                 .write_all(&[MsgType::Data as u8])
-                .fatal(&ev_tx, |m| UiError::TransferFailed(m))
+                .fatal(&ev_tx, UiError::TransferFailed)
                 .is_none()
             {
                 result = Outcome::Error;
@@ -205,7 +198,7 @@ pub fn send_file(
             }
 
             if send_nonce(stream, nonce)
-                .fatal(&ev_tx, |m| UiError::NonceSendFailed(m))
+                .fatal(&ev_tx, UiError::NonceSendFailed)
                 .is_none()
             {
                 result = Outcome::Error;
@@ -216,7 +209,7 @@ pub fn send_file(
             let len = encrypted_chunks.len() as u32;
             if stream
                 .write_all(&len.to_be_bytes())
-                .fatal(&ev_tx, |m| UiError::TransferFailed(m))
+                .fatal(&ev_tx, UiError::TransferFailed)
                 .is_none()
             {
                 result = Outcome::Error;
@@ -226,7 +219,7 @@ pub fn send_file(
 
             if stream
                 .write_all(&encrypted_chunks)
-                .fatal(&ev_tx, |m| UiError::TransferFailed(m))
+                .fatal(&ev_tx, UiError::TransferFailed)
                 .is_none()
             {
                 result = Outcome::Error;
@@ -279,7 +272,7 @@ pub fn receive_file(
             }
 
             if state.error {
-                let _ = write_error(stream);
+                write_error(stream);
                 break;
             }
         }
@@ -354,11 +347,11 @@ pub fn receive_file(
 pub fn send_file_metadata(stream: &mut TcpStream, metadata: FileMetadata) -> Result<(), Error> {
     let name_len = metadata.name.len() as u16;
     stream.write_all(&name_len.to_be_bytes())?;
-    stream.write_all(&metadata.name.as_bytes())?;
+    stream.write_all(metadata.name.as_bytes())?;
 
     let size = metadata.size.len() as u16;
     stream.write_all(&size.to_be_bytes())?;
-    stream.write_all(&metadata.size.as_bytes())?;
+    stream.write_all(metadata.size.as_bytes())?;
 
     let raw_size = metadata.raw_bytes.to_be_bytes().len();
     stream.write_all(&raw_size.to_be_bytes())?;
@@ -366,15 +359,15 @@ pub fn send_file_metadata(stream: &mut TcpStream, metadata: FileMetadata) -> Res
 
     let file_type = metadata.file_type.len() as u16;
     stream.write_all(&file_type.to_be_bytes())?;
-    stream.write_all(&metadata.file_type.as_bytes())?;
+    stream.write_all(metadata.file_type.as_bytes())?;
 
     let path = metadata.path.len() as u16;
     stream.write_all(&path.to_be_bytes())?;
-    stream.write_all(&metadata.path.as_bytes())?;
+    stream.write_all(metadata.path.as_bytes())?;
 
     let modified_date = metadata.modified_date.len() as u16;
     stream.write_all(&modified_date.to_be_bytes())?;
-    stream.write_all(&metadata.modified_date.as_bytes())?;
+    stream.write_all(metadata.modified_date.as_bytes())?;
 
     Ok(())
 }
@@ -423,12 +416,12 @@ pub fn receive_metadata(stream: &mut TcpStream) -> Result<FileMetadata, Error> {
     let raw_bytes = u64::from_be_bytes(try_u64);
 
     Ok(FileMetadata {
-        name: name,
-        size: size,
-        raw_bytes: raw_bytes,
-        file_type: file_type,
-        path: path,
-        modified_date: modified_date,
+        name,
+        size,
+        raw_bytes,
+        file_type,
+        path,
+        modified_date,
     })
 }
 
@@ -436,6 +429,7 @@ enum HashType {
     Some = 1,
     None = 0,
 }
+
 // Blake3 hash len is 32.. so.
 pub fn send_hash(hash: Option<Hash>, stream: &mut TcpStream) -> Result<(), Error> {
     match hash {

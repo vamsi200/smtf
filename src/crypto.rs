@@ -20,10 +20,10 @@ pub enum Mode {
 
 pub fn derive_session_keys(
     shared: &SharedSecret,
-    transcript: &Vec<u8>,
+    transcript: &[u8],
     role: Mode,
 ) -> Result<SessionKeys, Error> {
-    let hk = Hkdf::<Sha256>::new(Some(&transcript), shared.as_bytes());
+    let hk = Hkdf::<Sha256>::new(Some(transcript), shared.as_bytes());
     let mut tx_key = [0u8; 32];
     let mut rx_key = [0u8; 32];
 

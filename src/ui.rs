@@ -164,12 +164,12 @@ impl AppState {
                             if let (Some(handshake_state), Some(hd)) =
                                 (&self.handshake_state, &self.handshake_data)
                             {
-                                let is_peer_connected = match handshake_state {
-                                    SenderHandShakeState::VerifyingSecret => false,
-                                    SenderHandShakeState::Initialized => false,
-                                    SenderHandShakeState::SecretDerived => false,
-                                    _ => true,
-                                };
+                                let is_peer_connected = !matches!(
+                                    handshake_state,
+                                    SenderHandShakeState::VerifyingSecret
+                                        | SenderHandShakeState::Initialized
+                                        | SenderHandShakeState::SecretDerived
+                                );
 
                                 sender_status_card(
                                     ui,
@@ -196,7 +196,7 @@ impl AppState {
                             }
 
                             if let Some(tp) = &self.transfer_progress {
-                                progress_bar(ui, &tp, &cmd_tx, &cond_var);
+                                progress_bar(ui, tp, &cmd_tx, &cond_var);
                             }
 
                             completion_popup(ctx, self.is_sent, &mut mode, true);
@@ -331,7 +331,7 @@ impl AppState {
                                         );
 
                                         if let Some(tp) = &self.transfer_progress {
-                                            progress_bar(ui, &tp, &cmd_tx, &cond_var);
+                                            progress_bar(ui, tp, &cmd_tx, &cond_var);
                                         }
                                     }
                                     _ => {}
@@ -541,7 +541,7 @@ fn sender_status_card(
     let accent = Color32::from_rgb(100, 180, 255);
     let expanded_id = egui::Id::new("transfer_secret_expanded");
 
-    let status_frame = Frame::window(&ui.style())
+    let status_frame = Frame::window(ui.style())
         .fill(Color32::from_rgb(15, 15, 20))
         .stroke(Stroke::new(1.0, Color32::from_gray(60)))
         .inner_margin(Margin::same(20))
@@ -705,13 +705,13 @@ fn sender_status_card(
                         ui.available_size_before_wrap(),
                         Layout::right_to_left(Align::Center),
                         |ui| {
-                            if action_button_compact(ui, "Copy", accent).clicked() {
-                                if let Ok(_) = clipboard.set_text(secret_code) {
-                                    *is_copied = PopupState {
-                                        popup: Some(PopupKind::Copied),
-                                        popup_since: ctx.input(|x| x.time),
-                                    };
-                                }
+                            if action_button_compact(ui, "Copy", accent).clicked()
+                                && clipboard.set_text(secret_code).is_ok()
+                            {
+                                *is_copied = PopupState {
+                                    popup: Some(PopupKind::Copied),
+                                    popup_since: ctx.input(|x| x.time),
+                                };
                             }
                         },
                     );
@@ -750,7 +750,7 @@ fn sender_card_single_box(
         port: "...".to_string(),
     });
 
-    let outer_frame = egui::Frame::window(&ui.style())
+    let outer_frame = egui::Frame::window(ui.style())
         .fill(Color32::from_rgb(15, 15, 20))
         .stroke(egui::Stroke::new(1.0, Color32::from_gray(60)))
         .inner_margin(egui::Margin::same(10))
@@ -1009,7 +1009,7 @@ fn progress_bar(
     let fraction = progress.fraction();
     let desired_height = 16.0;
 
-    let progress_frame = Frame::window(&ui.style())
+    let progress_frame = Frame::window(ui.style())
         .fill(Color32::from_rgb(15, 15, 20))
         .stroke(Stroke::new(1.0, Color32::from_gray(60)))
         .inner_margin(Margin::same(16))
@@ -1050,9 +1050,9 @@ fn progress_bar(
             );
 
             let progress_color = Color32::from_rgb(
-                (50 + (100.0 * fraction) as u8).min(150),
+                50 + (100.0 * fraction) as u8,
                 180,
-                (100 + (155.0 * fraction) as u8).min(255),
+                100 + (155.0 * fraction) as u8,
             );
 
             painter.rect_filled(progress_rect, 0.0, progress_color);
@@ -1544,7 +1544,7 @@ fn initial_receive_card(
     is_expanded: &mut bool,
 ) {
     let accent = Color32::from_rgb(180, 100, 255);
-    let status_frame = egui::Frame::window(&ui.style())
+    let status_frame = egui::Frame::window(ui.style())
         .fill(Color32::from_rgb(15, 15, 20))
         .stroke(Stroke::new(1.0, Color32::from_gray(60)))
         .inner_margin(Margin::same(20))
@@ -1731,7 +1731,7 @@ fn receiver_card_single_box(
 ) {
     let accent = Color32::from_rgb(180, 100, 255);
 
-    let outer_frame = Frame::window(&ui.style())
+    let outer_frame = Frame::window(ui.style())
         .fill(Color32::from_rgb(15, 15, 20))
         .stroke(Stroke::new(1.0, Color32::from_gray(60)))
         .inner_margin(Margin::same(20))

@@ -50,13 +50,13 @@ pub fn derive_shared_secret(
 pub fn derive_transcript(
     sender_public_key: PublicKey,
     receiver_public_key: PublicKey,
-    secret: &Vec<u8>,
+    secret: &[u8],
 ) -> Vec<u8> {
     let mut hash = Sha256::new();
     hash.update(b"SMTF/1.0");
     hash.update(sender_public_key.as_bytes());
     hash.update(receiver_public_key.as_bytes());
-    hash.update(secret.clone());
+    hash.update(secret);
     hash.finalize().to_vec()
 }
 
@@ -74,10 +74,9 @@ pub fn gen_human_readable_transfer_code(encoded_data: &str) -> String {
         .join("-")
 }
 
-pub fn parse_transfer_code(transfer_code: &String) -> RawTransferCode {
+pub fn parse_transfer_code(transfer_code: &str) -> RawTransferCode {
     transfer_code
         .split_terminator('-')
-        .into_iter()
         .collect::<Vec<_>>()
         .concat()
 }
@@ -111,8 +110,8 @@ pub fn decode(encoded_data: &HumanReadableTransferCode) -> Option<TransferCode> 
         let secret = split.1.to_owned();
 
         Some(TransferCode {
-            socket_addr: socket_addr,
-            secret: secret,
+            socket_addr,
+            secret,
         })
     } else {
         return None;
@@ -234,9 +233,7 @@ pub fn sender(
         None
     } else {
         let h = get_file_hash(&mut file)?;
-        let _ = ev_tx.send(SenderEvent::FileHash(FileHash {
-            hash: Some(h.clone()),
-        }));
+        let _ = ev_tx.send(SenderEvent::FileHash(FileHash { hash: Some(h) }));
         Some(h)
     };
 
@@ -262,7 +259,7 @@ pub fn sender(
                     ));
 
                     if verify_secret(&mut stream, &transfer_code)
-                        .fatal(&ev_tx, |m| UiError::SecretVerificationFailed(m))
+                        .fatal(&ev_tx, UiError::SecretVerificationFailed)
                         .is_none()
                     {
                         break;
@@ -275,7 +272,7 @@ pub fn sender(
                     let state = generate_key_state();
 
                     if send_public_key(&mut stream, &state.public_key)
-                        .fatal(&ev_tx, |m| UiError::PublicKeySendFailed(m))
+                        .fatal(&ev_tx, UiError::PublicKeySendFailed)
                         .is_none()
                     {
                         break;
@@ -286,7 +283,7 @@ pub fn sender(
                     ));
 
                     let peer_pk = match receive_public_key(&mut stream)
-                        .fatal(&ev_tx, |m| UiError::PublicKeyReceiveFailed(m))
+                        .fatal(&ev_tx, UiError::PublicKeyReceiveFailed)
                     {
                         Some(pk) => pk,
                         None => break,
@@ -311,7 +308,7 @@ pub fn sender(
 
                     let session_keys =
                         match derive_session_keys(&shared_secret, &transcript, Mode::Sender)
-                            .fatal(&ev_tx, |m| UiError::SessionKeysFailed(m))
+                            .fatal(&ev_tx, UiError::SessionKeysFailed)
                         {
                             Some(sk) => sk,
                             None => break,
@@ -328,7 +325,7 @@ pub fn sender(
                         break;
                     }
 
-                    if send_hash(hash.clone(), &mut stream)
+                    if send_hash(hash, &mut stream)
                         .fatal(&ev_tx, |_| UiError::HashSendFailed)
                         .is_none()
                     {
@@ -350,7 +347,7 @@ pub fn sender(
                                 &mut file,
                                 &mut stream,
                                 session_keys.sender_key,
-                                hash.clone(),
+                                hash,
                                 ev_tx.clone(),
                                 &cancel_clone,
                                 &pause_cond,
@@ -360,7 +357,7 @@ pub fn sender(
                             if matches!(outcome, Outcome::Completed) {
                                 let _ = ev_tx.send(SenderEvent::TransferCompleted);
                                 if hash.is_none() {
-                                    let _ = send_hash(Some(final_hash.clone()), &mut stream);
+                                    let _ = send_hash(Some(final_hash), &mut stream);
                                     let _ = ev_tx.send(SenderEvent::FileHash(FileHash {
                                         hash: Some(final_hash),
                                     }));
@@ -404,7 +401,7 @@ const NONCE_LEN: usize = 12;
 
 pub fn send_nonce(stream: &mut TcpStream, nonce: Nonce) -> std::io::Result<()> {
     assert_eq!(NONCE_LEN, nonce.len());
-    stream.write_all(&nonce.to_vec())?;
+    stream.write_all(&nonce)?;
     stream.flush()?;
     std::io::Result::Ok(())
 }
@@ -575,12 +572,6 @@ pub fn start_receiver(
 
     let hash = match receive_hash(&mut stream) {
         Ok(hash) => hash,
-        Ok(None) => {
-            let _ = cmd_tx.send(ReceiverState::Error(UiError::HashReceiveFailed(Some(
-                "Hash missing".into(),
-            ))));
-            return;
-        }
         Err(e) => {
             let _ = cmd_tx.send(ReceiverState::Error(UiError::HashReceiveFailed(Some(
                 e.to_string(),
@@ -625,18 +616,16 @@ pub fn start_receiver(
                         None => return,
                     };
 
-                if let Ok(outcome) = receive_file(
+                if let Ok(Outcome::Completed) = receive_file(
                     &mut stream,
                     session_keys.receiver_key,
                     &mut file,
                     &cmd_tx,
                     &cancel,
                     &pause,
-                    &cond_state,
+                    cond_state,
                 ) {
-                    if let Outcome::Completed = outcome {
-                        let _ = cmd_tx.send(ReceiverState::RecieveCompleted);
-                    }
+                    let _ = cmd_tx.send(ReceiverState::RecieveCompleted);
                 }
             }
 
@@ -702,10 +691,10 @@ pub fn receiver(
     });
 
     Ok(ReceiverTask {
-        handle: handle,
-        decision_tx: decision_tx,
-        cancel: cancel,
-        pause: pause,
+        handle,
+        decision_tx,
+        cancel,
+        pause,
     })
 }
 

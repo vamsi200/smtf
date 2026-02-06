@@ -38,7 +38,7 @@ pub fn get_file_hash(file: &mut File) -> Result<Hash, Error> {
         if n == 0 {
             break;
         }
-        hasher.update(&mut buf[..n]);
+        hasher.update(&buf[..n]);
     }
 
     Ok(hasher.finalize())
@@ -56,12 +56,8 @@ pub fn get_file_metadata(file: &File, file_path: &PathBuf) -> Result<FileMetadat
         .unwrap_or_default()
         .to_owned();
 
-    let file_type = if let Ok(f_type) = infer::get_from_path(file_path) {
-        if let Some(file_type) = f_type {
-            format!("{}", file_type.mime_type())
-        } else {
-            String::from("Unknown")
-        }
+    let file_type = if let Some(file_type) = infer::get_from_path(file_path)? {
+        file_type.mime_type().to_string()
     } else {
         String::from("Unknown")
     };
@@ -97,9 +93,9 @@ pub fn get_file_metadata(file: &File, file_path: &PathBuf) -> Result<FileMetadat
         name: file_name,
         size: file_size,
         raw_bytes: raw_file_size,
-        file_type: file_type,
+        file_type,
         path: file_path,
-        modified_date: modified_date,
+        modified_date,
     };
 
     Ok(file_metadata)
